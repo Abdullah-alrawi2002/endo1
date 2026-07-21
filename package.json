@@ -9,7 +9,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "batch": "tsx --env-file=.env scripts/batch-diagnose.mts",
+    "ct:up": "docker compose up --build ct-sidecar",
+    "ct:down": "docker compose down"
   },
   "dependencies": {
     "better-sqlite3": "^12.9.0",
@@ -24,8 +27,11 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "csv-parse": "^6.2.1",
+    "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
+    "tsx": "^4.22.3",
     "typescript": "^5"
   }
 }

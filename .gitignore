@@ -46,3 +46,12 @@ next-env.d.ts
 /data/*.db-journal
 /data/*.db-wal
 /data/*.db-shm
+/data/ct-analyses/
+
+# Python CT sidecar caches and locally mounted model weights
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+/ct-models/
+/ct-sidecar/.venv/

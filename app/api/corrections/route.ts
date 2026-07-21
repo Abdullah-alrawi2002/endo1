@@ -7,10 +7,21 @@ import { getDb } from "@/lib/correction-rag/db";
 import { insertCorrection, listRecentCorrections } from "@/lib/correction-rag/search";
 import { embedCorrectionDocument } from "@/lib/endodontic-agent/run-pipeline";
 import { correctionIngestSchema } from "@/lib/schemas/clinical-case";
+import { isCorrectionRagEnabled } from "@/lib/features";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
+  if (!isCorrectionRagEnabled()) {
+    return Response.json(
+      {
+        error:
+          "Correction RAG is disabled (ENABLE_CORRECTION_RAG=false). This experimental module stays off until independently validated.",
+      },
+      { status: 403 },
+    );
+  }
+
   let body: unknown;
   try {
     body = await req.json();
@@ -28,14 +39,21 @@ export async function POST(req: Request) {
 
   try {
     const b = parsed.data;
-    const caseCanonical = serializeCaseCanonical(b.case);
+    const caseCanonical = serializeCaseCanonical({
+      ...b.case,
+      ctSupport: undefined,
+    });
     const embedDocument = buildCorrectionEmbedDocument(
       caseCanonical,
+      b.agentStatus,
       b.agentPulpal,
       b.agentApical,
-      b.correctedPulpal,
-      b.correctedApical,
+      b.adjudicatedReferenceDiagnosis.status,
+      b.adjudicatedReferenceDiagnosis.pulpal,
+      b.adjudicatedReferenceDiagnosis.apical,
       b.correctionReasoning,
+      b.errorTypes,
+      b.specialistIdentity,
       b.misunderstoodSummary,
     );
     const queryVector = await embedCorrectionDocument(embedDocument);
@@ -44,16 +62,20 @@ export async function POST(req: Request) {
       id: randomUUID(),
       createdAt: Date.now(),
       caseCanonical,
-      agentPulpal: b.agentPulpal,
-      agentApical: b.agentApical,
-      correctedPulpal: b.correctedPulpal,
-      correctedApical: b.correctedApical,
+      agentPulpal: b.agentPulpal ?? "null",
+      agentApical: b.agentApical ?? "null",
+      correctedPulpal: b.adjudicatedReferenceDiagnosis.pulpal ?? "null",
+      correctedApical: b.adjudicatedReferenceDiagnosis.apical ?? "null",
       reasoning: b.correctionReasoning,
       misunderstood: b.misunderstoodSummary?.trim() || null,
       embedDocument,
       queryVector,
     });
-    return Response.json({ ok: true });
+    return Response.json({
+      ok: true,
+      approvalStatus: b.approvalStatus,
+      note: "Stored as pending/approved adjudicated reference. Validate patients must stay out of this store.",
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed to save correction";
     return Response.json({ error: msg }, { status: 500 });
@@ -61,6 +83,9 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
+  if (!isCorrectionRagEnabled()) {
+    return Response.json({ corrections: [], enabled: false });
+  }
   const { searchParams } = new URL(req.url);
   const limit = Math.min(
     100,
@@ -69,7 +94,7 @@ export async function GET(req: Request) {
   try {
     const db = getDb();
     const rows = listRecentCorrections(db, limit);
-    return Response.json({ corrections: rows });
+    return Response.json({ corrections: rows, enabled: true });
   } catch (e) {
     return Response.json(
       { error: e instanceof Error ? e.message : "List failed" },

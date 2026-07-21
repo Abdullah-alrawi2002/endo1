@@ -1,0 +1,17 @@
+services:
+  ct-sidecar:
+    build:
+      context: ./ct-sidecar
+    ports:
+      - "8000:8000"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CT_VISION_MODEL: ${CT_VISION_MODEL:-gpt-4o}
+      CT_ASSUME_CALIBRATED_HU: ${CT_ASSUME_CALIBRATED_HU:-false}
+      CT_MAX_CONCURRENT_ANALYSES: "1"
+      NNUNET_DATASET_ID: "112"
+      NNUNET_CONFIGURATION: "3d_fullres"
+      NNUNET_FOLDS: "all"
+    volumes:
+      - ./ct-models:/models
+    restart: unless-stopped

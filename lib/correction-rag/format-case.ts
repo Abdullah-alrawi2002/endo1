@@ -1,61 +1,70 @@
 import type { ClinicalCase } from "@/lib/schemas/clinical-case";
 
-const coldLabels: Record<ClinicalCase["clinical"]["cold"], string> = {
-  normal: "Normal (mild/sharp, subsides within 1–2s after removal)",
-  exaggerated_non_lingering:
-    "Exaggerated but non-lingering (sharp, disappears within seconds)",
-  lingering: "Lingering (severe pain continues after removal)",
-  negative: "Negative (no response)",
-};
-
-function visualLabel(value: ClinicalCase["visual"]["sinusTract"]): string {
-  if (value === "present") return "Present";
-  if (value === "absent") return "Absent";
-  return "Unknown / not assessed";
-}
-
-function optionalTestLabel(
-  value: ClinicalCase["clinical"]["ept"],
-  positive: string,
-  negative: string,
-): string {
-  if (value === "not_performed") return "Not performed";
-  if (value === "positive") return positive;
-  return negative;
-}
-
-function imagingLabel(value: ClinicalCase["imaging"]["periapicalRadiolucency"]): string {
-  return value === "present" ? "Present" : "Absent";
+function label(v: string): string {
+  return v.replaceAll("_", " ");
 }
 
 export function serializeCaseCanonical(c: ClinicalCase): string {
   const lines: string[] = [
-    "=== Visual examination ===",
-    `Sinus tract: ${visualLabel(c.visual.sinusTract)}`,
-    `Swelling: ${visualLabel(c.visual.swelling)}`,
-    `Decay: ${visualLabel(c.visual.decay)}`,
-    `Signs of trauma: ${visualLabel(c.visual.traumaSigns)}`,
+    `Taxonomy: ${c.taxonomyVersion}`,
+    `Tooth: Universal #${c.tooth.universal}${c.tooth.fdi ? ` / FDI ${c.tooth.fdi}` : ""}; dentition=${c.tooth.dentition}; apex=${c.tooth.apexMaturity}`,
+    `Treatment history: ${c.treatmentHistory}`,
     "",
-    "=== Clinical tests ===",
-    `Cold test: ${coldLabels[c.clinical.cold]}`,
-    ...(c.clinical.cold === "lingering" && c.clinical.coldLingerSeconds
-      ? [
-          `Cold linger duration (reported): ~${c.clinical.coldLingerSeconds} seconds`,
-        ]
+    "=== Symptoms ===",
+    `Spontaneous: ${c.symptoms.spontaneousPain}; nocturnal: ${c.symptoms.nocturnalPain}; postural: ${c.symptoms.posturalPain}; referred: ${c.symptoms.referredPain}`,
+    `Thermal pain history: ${c.symptoms.thermalPainHistory}; heat: ${c.symptoms.heatResponse}; cold relieves pain: ${c.symptoms.coldRelievesPain}`,
+    "",
+    "=== Visual ===",
+    `Sinus tract: ${c.visual.sinusTract} (traced=${c.visual.sinusTractTraced})`,
+    `Swelling: ${c.visual.swelling} (severity=${c.visual.swellingSeverity}; rapid=${c.visual.rapidOnsetSwelling}; fluctuance=${c.visual.fluctuance}; pus=${c.visual.pus})`,
+    `Fever: ${c.visual.fever}; lymphadenopathy: ${c.visual.lymphadenopathy}`,
+    `Decay: ${c.visual.decay}; deep caries/exposure: ${c.visual.deepCariesOrExposure}; crown: ${c.visual.crownPresent}; crack: ${c.visual.crackSuspected}; trauma signs: ${c.visual.traumaSigns}`,
+    "",
+    "=== Sensibility & mechanical tests ===",
+    `Cold: ${label(c.clinical.cold)}; linger_s=${c.clinical.coldLingerSeconds ?? "n/a"}; vs control=${c.clinical.coldComparedToControl}; validity=${c.clinical.coldValidity}; repeated=${c.clinical.coldRepeated}`,
+    `EPT: ${c.clinical.ept}; vs control=${c.clinical.eptComparedToControl}; validity=${c.clinical.eptValidity}; repeated=${c.clinical.eptRepeated}`,
+    `Percussion severity: ${c.clinical.percussion}`,
+    `Palpation severity: ${c.clinical.palpation}`,
+    `Biting severity: ${c.clinical.biting}`,
+    `Tooth Slooth (crack/bite): ${c.clinical.toothSloothBiting}`,
+    `Transillumination (structural): ${c.clinical.transillumination}`,
+    `Fluorescent light: ${c.clinical.fluorescentLight}`,
+    "",
+    "=== Periodontal ===",
+    `Isolated deep pocket: ${c.periodontal.isolatedDeepPocket}; mobility: ${c.periodontal.mobility}; occlusion trauma: ${c.periodontal.occlusionTrauma}`,
+    ...(c.periodontal.probingDepthsMm
+      ? [`Probing depths: ${c.periodontal.probingDepthsMm}`]
       : []),
-    `Percussion: ${c.clinical.percussion === "positive" ? "Positive (pain)" : "Negative"}`,
-    `Palpation: ${c.clinical.palpation === "positive" ? "Positive (pain/swelling)" : "Negative"}`,
-    `EPT: ${optionalTestLabel(c.clinical.ept, "Positive (vital conduction)", "Negative (no conduction)")}`,
-    `Fluorescent light: ${optionalTestLabel(c.clinical.fluorescentLight, "Positive (fluorescence / caries indicator)", "Negative")}`,
-    `Tooth Slooth biting: ${optionalTestLabel(c.clinical.toothSloothBiting, "Positive (pain on cusp bite)", "Negative")}`,
     "",
-    "=== Imaging ===",
-    `Periapical radiolucency: ${imagingLabel(c.imaging.periapicalRadiolucency)}`,
-    `J-shaped periapical radiolucency: ${imagingLabel(c.imaging.jShapedPeriapicalRadiolucency)}`,
-    `Widening of periodontal ligament: ${imagingLabel(c.imaging.widenedPeriodontalLigament)}`,
-    `Internal resorption: ${imagingLabel(c.imaging.internalResorption)}`,
-    `External resorption: ${imagingLabel(c.imaging.externalResorption)}`,
+    "=== Imaging (clinician-assessed) ===",
+    `PARL: ${c.imaging.periapicalRadiolucency}; J-shaped: ${c.imaging.jShapedPeriapicalRadiolucency}; widened PDL: ${c.imaging.widenedPeriodontalLigament}; lamina dura loss: ${c.imaging.laminaDuraLoss}`,
+    `Multiple PA views: ${c.imaging.multiplePaViews}; internal resorption: ${c.imaging.internalResorption}; external resorption: ${c.imaging.externalResorption}`,
+    ...(c.imaging.parlLocationNotes
+      ? [`PARL notes: ${c.imaging.parlLocationNotes}`]
+      : []),
+    "",
+    "=== Confounders ===",
+    `Recent anesthesia: ${c.confounders.recentAnesthesia}; calcification: ${c.confounders.calcificationSuspected}; poor isolation: ${c.confounders.poorIsolation}; generalized low responsiveness: ${c.confounders.generalizedLowResponsiveness}; recent trauma: ${c.confounders.recentTrauma}`,
   ];
+
+  if (c.ctSupport) {
+    const ct = c.ctSupport;
+    lines.push(
+      "",
+      "=== CT SUPPORT (research / non-diagnostic) ===",
+      `analysisId=${ct.analysisId}; qualityGatePassed=${ct.qualityGatePassed}; clinicianReviewed=${ct.clinicianReviewed}; clinicianSeedProvided=${ct.clinicianSeedProvided}`,
+      `candidateLowAttenuationRegion=${ct.candidateLowAttenuationRegion}; location=${ct.candidateLocation ?? "n/a"}; volumeMm3=${ct.candidateVolumeMm3 ?? "n/a"}; relativeDrop%=${ct.relativeAttenuationDropPercent ?? "n/a"}`,
+      `canalLengthEstimateMm=${ct.canalLengthEstimateMm ?? "n/a"} (anatomical estimate only; not clinical WL)`,
+      `vertucciScreen=${ct.vertucciScreen ?? "n/a"}`,
+      ...(ct.artifactWarnings.length
+        ? [`Artifact warnings: ${ct.artifactWarnings.join("; ")}`]
+        : []),
+      ...(ct.qualityGateFailures.length
+        ? [`Quality gate failures: ${ct.qualityGateFailures.join("; ")}`]
+        : []),
+    );
+  }
+
   if (c.additionalNotes?.trim()) {
     lines.push("", `Additional notes: ${c.additionalNotes.trim()}`);
   }
@@ -64,24 +73,32 @@ export function serializeCaseCanonical(c: ClinicalCase): string {
 
 export function buildCorrectionEmbedDocument(
   caseBlock: string,
-  agentPulpal: string,
-  agentApical: string,
-  correctedPulpal: string,
-  correctedApical: string,
+  agentStatus: string,
+  agentPulpal: string | null,
+  agentApical: string | null,
+  adjudicatedStatus: string,
+  correctedPulpal: string | null,
+  correctedApical: string | null,
   reasoning: string,
+  errorTypes: string[],
+  specialistIdentity: string,
   misunderstood?: string,
 ): string {
   return [
     "=== CLINICAL CASE ===",
     caseBlock,
     "",
-    "=== AGENT (WRONG) ===",
-    `Pulpal: ${agentPulpal}`,
-    `Apical: ${agentApical}`,
+    "=== AGENT OUTPUT ===",
+    `Status: ${agentStatus}`,
+    `Pulpal: ${agentPulpal ?? "null"}`,
+    `Apical: ${agentApical ?? "null"}`,
     "",
-    "=== CLINICIAN CORRECTION ===",
-    `Pulpal: ${correctedPulpal}`,
-    `Apical: ${correctedApical}`,
+    "=== ADJUDICATED REFERENCE DIAGNOSIS ===",
+    `Status: ${adjudicatedStatus}`,
+    `Pulpal: ${correctedPulpal ?? "null"}`,
+    `Apical: ${correctedApical ?? "null"}`,
+    `Error types: ${errorTypes.join(", ")}`,
+    `Specialist: ${specialistIdentity}`,
     "",
     "=== WHY THE AGENT WAS WRONG ===",
     reasoning,
