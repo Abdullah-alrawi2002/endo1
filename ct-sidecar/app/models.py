@@ -22,6 +22,7 @@ class DensityInfo(BaseModel):
 class CTSupport(BaseModel):
     """Non-diagnostic CBCT research support payload."""
 
+    analysisId: str | None = None
     status: Literal["completed", "partial", "failed"]
     targetToothUniversal: int
     clinicianSeedProvided: bool = False

@@ -110,17 +110,18 @@ function parseModelJson(raw: string): unknown {
   return JSON.parse(s);
 }
 
-function attachCtSupport(clinicalCase: ClinicalCase): ClinicalCase {
+function attachCtSupport(clinicalCase: ClinicalCase): Promise<ClinicalCase> {
   if (!isCtModuleEnabled() || !clinicalCase.ctAnalysisId) {
-    return { ...clinicalCase, ctSupport: undefined };
+    return Promise.resolve({ ...clinicalCase, ctSupport: undefined });
   }
-  const stored = loadCtSupport(clinicalCase.ctAnalysisId);
-  if (!stored) {
-    throw new Error(
-      "ctAnalysisId was not found server-side. Re-run CT analysis or clear the CT field.",
-    );
-  }
-  return { ...clinicalCase, ctSupport: stored };
+  return loadCtSupport(clinicalCase.ctAnalysisId).then((stored) => {
+    if (!stored) {
+      throw new Error(
+        "ctAnalysisId was not found. Re-run CT analysis or clear the CT field.",
+      );
+    }
+    return { ...clinicalCase, ctSupport: stored };
+  });
 }
 
 function emitEvidence(gate: ReturnType<typeof runClinicalGate>, extra?: Partial<FinalDiagnosis>): Extract<StreamEvent, { type: "evidence" }> {
@@ -143,7 +144,7 @@ export async function* runDiagnosisPipeline(
   options: DiagnosisPipelineOptions = {},
 ): AsyncGenerator<StreamEvent> {
   try {
-    const clinicalCase = attachCtSupport(clinicalCaseInput);
+    const clinicalCase = await attachCtSupport(clinicalCaseInput);
     yield { type: "status", message: "Running Stage 0 scope/validity gate…" };
 
     const gate = runClinicalGate(clinicalCase);

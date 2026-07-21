@@ -34,6 +34,7 @@ type FeatureFlags = {
   correctionRagEnabled: boolean;
   taxonomyVersion: string;
   mvpMode: string;
+  ctUploadUrl: string | null;
 };
 
 export default function Home() {
@@ -71,6 +72,7 @@ export default function Home() {
           correctionRagEnabled: true,
           taxonomyVersion: TAXONOMY_VERSION,
           mvpMode: "clinical_agentic",
+          ctUploadUrl: null,
         }),
       );
   }, []);
@@ -218,6 +220,7 @@ export default function Home() {
       {features?.ctModuleEnabled ? (
         <CTAnalysisUpload
           analysisId={clinicalCase.ctAnalysisId}
+          ctUploadUrl={features.ctUploadUrl}
           onChange={(ctAnalysisId) =>
             setClinicalCase((current) => ({ ...current, ctAnalysisId }))
           }

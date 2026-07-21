@@ -10,7 +10,7 @@ let cached: string | null = null;
 export function loadCurriculum(): string {
   if (cached) return cached;
   const path = join(
-    /* turbopackIgnore: true */ process.cwd(),
+    /*turbopackIgnore: true*/ process.cwd(),
     "lib",
     "prompts",
     "curriculum.md",

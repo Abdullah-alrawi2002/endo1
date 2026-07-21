@@ -7,19 +7,35 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
+from fastapi.middleware.cors import CORSMiddleware
 
+from .analysis_store import load_analysis, save_analysis
 from .dicom_io import safe_extract_zip
 from .models import CTSupport
 from .pipeline import analyze_ct_series
 
 
+def _allowed_origins() -> list[str]:
+    raw = os.getenv("CT_ALLOWED_ORIGINS", "*").strip()
+    if raw == "*":
+        return ["*"]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 app = FastAPI(
     title="Endodontic CT Research Support",
-    version="2.0.0",
+    version="2.1.0",
     description=(
-        "Experimental CBCT support module. Returns non-diagnostic candidate "
-        "features for clinician review. Off by default in the clinical MVP."
+        "Experimental CBCT support module. Accepts DICOM uploads directly from "
+        "the hosted web app. Returns non-diagnostic candidate features."
     ),
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins(),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
 )
 _analysis_lock = asyncio.Semaphore(
     int(os.getenv("CT_MAX_CONCURRENT_ANALYSES", "1"))
@@ -30,6 +46,14 @@ MAX_UPLOAD_BYTES = int(os.getenv("CT_MAX_UPLOAD_BYTES", str(1024 * 1024 * 1024))
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/analysis/{analysis_id}", response_model=CTSupport)
+def get_analysis(analysis_id: str) -> CTSupport:
+    stored = load_analysis(analysis_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    return stored
 
 
 async def _save_upload(upload: UploadFile, destination: Path) -> int:
@@ -92,7 +116,7 @@ async def analyze(
 
         async with _analysis_lock:
             try:
-                return await run_in_threadpool(
+                result = await run_in_threadpool(
                     analyze_ct_series,
                     input_dir,
                     work_dir,
@@ -106,3 +130,5 @@ async def analyze(
                     status_code=500,
                     detail=f"CT preprocessing failed: {str(exc)[:500]}",
                 ) from exc
+
+    return save_analysis(result)

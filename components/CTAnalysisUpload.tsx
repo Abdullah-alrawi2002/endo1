@@ -4,14 +4,15 @@ import { useRef, useState } from "react";
 
 type Props = {
   analysisId: string | undefined;
+  ctUploadUrl: string | null;
   onChange: (next: string | undefined) => void;
 };
 
 /**
- * Experimental CT upload. Enabled only when ENABLE_CT_MODULE=true.
- * Returns an opaque server-side analysisId — never trusts client CT metrics.
+ * Uploads DICOM directly to the hosted CT sidecar when ctUploadUrl is set
+ * (required on Vercel — avoids the ~4.5 MB serverless body limit).
  */
-export function CTAnalysisUpload({ analysisId, onChange }: Props) {
+export function CTAnalysisUpload({ analysisId, ctUploadUrl, onChange }: Props) {
   const [files, setFiles] = useState<File[]>([]);
   const [targetTooth, setTargetTooth] = useState("30");
   const [seedConfirmed, setSeedConfirmed] = useState(false);
@@ -22,6 +23,12 @@ export function CTAnalysisUpload({ analysisId, onChange }: Props) {
 
   async function analyze() {
     if (!files.length || !seedConfirmed) return;
+    if (!ctUploadUrl) {
+      setError(
+        "CT upload URL is not configured. Set CT_SIDECAR_URL on the server (see SHARE.md).",
+      );
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -29,27 +36,27 @@ export function CTAnalysisUpload({ analysisId, onChange }: Props) {
       form.set("targetTooth", targetTooth);
       form.set("clinicianSeedProvided", "true");
       for (const file of files) form.append("files", file, file.name);
-      const response = await fetch("/api/analyze-ct", {
+
+      const response = await fetch(`${ctUploadUrl.replace(/\/$/, "")}/analyze`, {
         method: "POST",
         body: form,
       });
       const data = (await response.json()) as {
         analysisId?: string;
-        ctSupportSummary?: {
-          status: string;
-          qualityGatePassed: boolean;
-          candidateLowAttenuationRegion: boolean | null;
-        };
+        status?: string;
+        qualityGatePassed?: boolean;
+        candidateLowAttenuationRegion?: boolean | null;
+        detail?: string;
         error?: string;
       };
       if (!response.ok || !data.analysisId) {
-        throw new Error(data.error || `HTTP ${response.status}`);
+        throw new Error(
+          data.detail || data.error || `CT sidecar returned HTTP ${response.status}`,
+        );
       }
       onChange(data.analysisId);
       setSummary(
-        data.ctSupportSummary
-          ? `Stored analysis ${data.analysisId} · status=${data.ctSupportSummary.status} · qualityGate=${data.ctSupportSummary.qualityGatePassed} · candidateLowAttenuation=${data.ctSupportSummary.candidateLowAttenuationRegion}`
-          : data.analysisId,
+        `Stored analysis ${data.analysisId} · status=${data.status ?? "unknown"} · qualityGate=${data.qualityGatePassed ?? "n/a"} · candidateLowAttenuation=${data.candidateLowAttenuationRegion ?? "n/a"}`,
       );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "CT analysis failed");
@@ -62,10 +69,17 @@ export function CTAnalysisUpload({ analysisId, onChange }: Props) {
     <div className="input-category">
       <h3>CT support (experimental / non-diagnostic)</h3>
       <p className="scan-disclaimer">
-        Upload a DICOM series only when clinically indicated. The sidecar stores
-        an opaque analysis id server-side. Results are candidate features for
-        review — they do not diagnose PARL, vitality, or canal length.
+        Upload a DICOM series or ZIP only when clinically indicated. Files go
+        directly to the CT processor (not through Vercel). Results are candidate
+        features for review — they do not diagnose PARL, vitality, or canal
+        length.
       </p>
+      {!ctUploadUrl ? (
+        <p className="error-text">
+          CT processor URL missing. Deploy the CT sidecar and set{" "}
+          <code>CT_SIDECAR_URL</code> on Vercel, then redeploy.
+        </p>
+      ) : null}
       <div className="input-grid">
         <label className="input-field">
           <span>Target tooth (Universal)</span>
@@ -108,9 +122,9 @@ export function CTAnalysisUpload({ analysisId, onChange }: Props) {
           type="button"
           className="btn"
           onClick={analyze}
-          disabled={!files.length || !seedConfirmed || busy}
+          disabled={!files.length || !seedConfirmed || busy || !ctUploadUrl}
         >
-          {busy ? "Processing…" : "Analyze CT (research)"}
+          {busy ? "Processing… (may take several minutes)" : "Analyze CT (research)"}
         </button>
         {analysisId ? (
           <button
