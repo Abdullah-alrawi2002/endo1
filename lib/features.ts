@@ -1,13 +1,16 @@
 /**
- * Feature flags for the clinical-first MVP.
- * CT support and correction RAG are experimental and OFF by default.
+ * Feature flags.
+ * Correction RAG is ON by default (core plan feature); set ENABLE_CORRECTION_RAG=false to disable.
+ * CT support remains experimental and OFF unless ENABLE_CT_MODULE=true.
  */
 export function isCtModuleEnabled(): boolean {
   return process.env.ENABLE_CT_MODULE?.trim().toLowerCase() === "true";
 }
 
 export function isCorrectionRagEnabled(): boolean {
-  return process.env.ENABLE_CORRECTION_RAG?.trim().toLowerCase() === "true";
+  const v = process.env.ENABLE_CORRECTION_RAG?.trim().toLowerCase();
+  if (v === "false" || v === "0" || v === "no") return false;
+  return true;
 }
 
 export function publicFeatureFlags() {
@@ -15,6 +18,6 @@ export function publicFeatureFlags() {
     taxonomyVersion: "AAE_2009" as const,
     ctModuleEnabled: isCtModuleEnabled(),
     correctionRagEnabled: isCorrectionRagEnabled(),
-    mvpMode: "clinical_only" as const,
+    mvpMode: "clinical_agentic" as const,
   };
 }

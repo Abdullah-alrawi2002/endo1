@@ -136,11 +136,11 @@ Your API key is like a password that lets the app talk to OpenAI. **Never share 
    OPENAI_API_KEY=sk-proj-your-actual-key-here
    ```
 
-6. Leave these **false** for the clinical MVP (CT and correction memory stay experimental):
+6. Correction RAG is **on** by default. Leave CT off unless you are evaluating that research module:
 
    ```text
+   ENABLE_CORRECTION_RAG=true
    ENABLE_CT_MODULE=false
-   ENABLE_CORRECTION_RAG=false
    ```
 
 7. **Save** the file and close it.

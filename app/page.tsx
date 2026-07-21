@@ -16,6 +16,8 @@ import {
 
 type StreamEvent =
   | { type: "status"; message: string }
+  | { type: "rag"; matchCount: number; contextBlock: string }
+  | { type: "stage"; stage: 1 | 2 | 3 | 4; title: string; content: string }
   | {
       type: "evidence";
       evidenceFor: FinalDiagnosis["evidenceFor"];
@@ -43,19 +45,21 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [showCorrection, setShowCorrection] = useState(false);
   const [corrStatus, setCorrStatus] = useState<DiagnosticStatus>("diagnosable");
-  const [corrPulpal, setCorrPulpal] = useState<(typeof PULPAL_DIAGNOSES)[number] | "">(
-    "",
-  );
-  const [corrApical, setCorrApical] = useState<(typeof APICAL_DIAGNOSES)[number] | "">(
-    "",
-  );
+  const [corrPulpal, setCorrPulpal] = useState<
+    (typeof PULPAL_DIAGNOSES)[number] | ""
+  >("");
+  const [corrApical, setCorrApical] = useState<
+    (typeof APICAL_DIAGNOSES)[number] | ""
+  >("");
   const [corrReason, setCorrReason] = useState("");
+  const [corrMisunderstood, setCorrMisunderstood] = useState("");
   const [corrErrorTypes, setCorrErrorTypes] = useState<string[]>([
     "invalid_test_interpretation",
   ]);
   const [specialistIdentity, setSpecialistIdentity] = useState("");
   const [corrSaving, setCorrSaving] = useState(false);
   const [corrMessage, setCorrMessage] = useState<string | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
 
   useEffect(() => {
     fetch("/api/features")
@@ -64,9 +68,9 @@ export default function Home() {
       .catch(() =>
         setFeatures({
           ctModuleEnabled: false,
-          correctionRagEnabled: false,
+          correctionRagEnabled: true,
           taxonomyVersion: TAXONOMY_VERSION,
-          mvpMode: "clinical_only",
+          mvpMode: "clinical_agentic",
         }),
       );
   }, []);
@@ -155,17 +159,38 @@ export default function Home() {
           specialistIdentity,
           taxonomyVersion: TAXONOMY_VERSION,
           approvalStatus: "pending",
+          misunderstoodSummary: corrMisunderstood || undefined,
         }),
       });
       const data = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      setCorrMessage("Adjudicated reference saved (pending approval).");
+      setCorrMessage("Correction saved to local RAG memory.");
       setShowCorrection(false);
       setCorrReason("");
+      setCorrMisunderstood("");
     } catch (e) {
       setCorrMessage(e instanceof Error ? e.message : "Save failed");
     } finally {
       setCorrSaving(false);
+    }
+  }
+
+  async function exportCorrections() {
+    setExportBusy(true);
+    try {
+      const res = await fetch("/api/corrections?limit=200");
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `endo-corrections-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExportBusy(false);
     }
   }
 
@@ -174,14 +199,14 @@ export default function Home() {
       <header>
         <h1 className="page-title">Endodontic diagnosis</h1>
         <p className="page-lede">
-          Clinical-only MVP · taxonomy {TAXONOMY_VERSION} · can abstain ·
-          clinician confirmation required. Educational decision support only —
-          not a medical device.
+          Agentic multi-stage pipeline · taxonomy {TAXONOMY_VERSION} ·
+          correction RAG · can abstain · clinician confirmation required.
+          Educational decision support only — not a medical device.
         </p>
         {features ? (
           <p className="page-lede">
-            CT module: {features.ctModuleEnabled ? "on" : "off"} · Correction
-            RAG: {features.correctionRagEnabled ? "on" : "off"}
+            Correction RAG: {features.correctionRagEnabled ? "on" : "off"} · CT
+            module: {features.ctModuleEnabled ? "on" : "off"}
           </p>
         ) : null}
       </header>
@@ -198,9 +223,8 @@ export default function Home() {
         />
       ) : (
         <p className="scan-disclaimer">
-          CBCT support is an experimental module and is off by default
-          (`ENABLE_CT_MODULE=false`). It does not participate in diagnosis in
-          this MVP.
+          CBCT support is optional/experimental (`ENABLE_CT_MODULE=true`). Off
+          by default; it does not participate in diagnosis unless enabled.
         </p>
       )}
 
@@ -213,21 +237,54 @@ export default function Home() {
         >
           {loading ? "Running…" : "Run"}
         </button>
+        {features?.correctionRagEnabled ? (
+          <button
+            type="button"
+            className="btn btn--ghost"
+            onClick={exportCorrections}
+            disabled={exportBusy}
+          >
+            {exportBusy ? "Exporting…" : "Export corrections"}
+          </button>
+        ) : null}
       </div>
 
       {error ? <p className="error-text">{error}</p> : null}
 
-      {events.some((e) => e.type === "status") ? (
+      {events.length > 0 ? (
         <section className="output-stack">
-          {events
-            .filter((e) => e.type === "status")
-            .map((ev, i) =>
-              ev.type === "status" ? (
-                <p key={`status-${i}`} className="body-text body-text--tight">
+          {events.map((ev, i) => {
+            if (ev.type === "status") {
+              return (
+                <p key={`${i}-status`} className="body-text body-text--tight">
                   {ev.message}
                 </p>
-              ) : null,
-            )}
+              );
+            }
+            if (ev.type === "rag") {
+              return (
+                <article key={`${i}-rag`} className="output-block">
+                  <h3 className="output-title">
+                    Similar corrections ({ev.matchCount})
+                  </h3>
+                  {ev.matchCount === 0 || !ev.contextBlock ? (
+                    <p className="body-text body-text--tight">None retrieved.</p>
+                  ) : (
+                    <pre className="output-pre">{ev.contextBlock}</pre>
+                  )}
+                </article>
+              );
+            }
+            if (ev.type === "stage") {
+              return (
+                <article key={`${i}-s${ev.stage}`} className="output-block">
+                  <h3 className="output-title">{ev.title}</h3>
+                  <pre className="output-pre">{ev.content}</pre>
+                </article>
+              );
+            }
+            return null;
+          })}
         </section>
       ) : null}
 
@@ -284,7 +341,7 @@ export default function Home() {
 
       {finalResult ? (
         <section className="output-block output-block--final">
-          <h3 className="output-title">Result</h3>
+          <h3 className="output-title">Final diagnosis</h3>
           <p className="body-text">
             Status: <strong>{finalResult.result.status}</strong> · Taxonomy{" "}
             {finalResult.result.taxonomyVersion}
@@ -337,7 +394,7 @@ export default function Home() {
                   setShowCorrection(true);
                 }}
               >
-                Save adjudicated reference
+                Submit correction
               </button>
             </div>
           ) : null}
@@ -352,10 +409,10 @@ export default function Home() {
           onClick={() => setShowCorrection(false)}
         >
           <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
-            <h2 className="modal-title">Adjudicated reference diagnosis</h2>
+            <h2 className="modal-title">Save correction</h2>
             <p className="modal-lede">
-              Specialist-attested label for the experimental correction library.
-              Do not include PHI.
+              No patient identifiers. Explain the error so similar cases retrieve
+              this lesson in RAG.
             </p>
             <label className="modal-field">
               <span>Specialist identity</span>
@@ -365,7 +422,7 @@ export default function Home() {
               />
             </label>
             <label className="modal-field">
-              <span>Status</span>
+              <span>Correct status</span>
               <select
                 value={corrStatus}
                 onChange={(e) =>
@@ -379,7 +436,7 @@ export default function Home() {
               </select>
             </label>
             <label className="modal-field">
-              <span>Pulpal</span>
+              <span>Correct pulpal</span>
               <select
                 value={corrPulpal}
                 onChange={(e) =>
@@ -397,7 +454,7 @@ export default function Home() {
               </select>
             </label>
             <label className="modal-field">
-              <span>Apical</span>
+              <span>Correct apical</span>
               <select
                 value={corrApical}
                 onChange={(e) =>
@@ -433,6 +490,14 @@ export default function Home() {
                 rows={5}
                 value={corrReason}
                 onChange={(e) => setCorrReason(e.target.value)}
+              />
+            </label>
+            <label className="modal-field">
+              <span>What did the agent misunderstand? (optional)</span>
+              <textarea
+                rows={3}
+                value={corrMisunderstood}
+                onChange={(e) => setCorrMisunderstood(e.target.value)}
               />
             </label>
             <div className="modal-actions">
