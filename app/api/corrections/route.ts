@@ -3,20 +3,23 @@ import {
   buildCorrectionEmbedDocument,
   serializeCaseCanonical,
 } from "@/lib/correction-rag/format-case";
-import { getDb } from "@/lib/correction-rag/db";
-import { insertCorrection, listRecentCorrections } from "@/lib/correction-rag/search";
+import {
+  insertCorrection,
+  listRecentCorrections,
+} from "@/lib/correction-rag/store";
 import { embedCorrectionDocument } from "@/lib/endodontic-agent/run-pipeline";
 import { correctionIngestSchema } from "@/lib/schemas/clinical-case";
 import { isCorrectionRagEnabled } from "@/lib/features";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 export async function POST(req: Request) {
   if (!isCorrectionRagEnabled()) {
     return Response.json(
       {
         error:
-          "Correction RAG is disabled (ENABLE_CORRECTION_RAG=false). This experimental module stays off until independently validated.",
+          "Correction RAG is disabled (ENABLE_CORRECTION_RAG=false).",
       },
       { status: 403 },
     );
@@ -57,8 +60,7 @@ export async function POST(req: Request) {
       b.misunderstoodSummary,
     );
     const queryVector = await embedCorrectionDocument(embedDocument);
-    const db = getDb();
-    insertCorrection(db, {
+    insertCorrection({
       id: randomUUID(),
       createdAt: Date.now(),
       caseCanonical,
@@ -74,7 +76,7 @@ export async function POST(req: Request) {
     return Response.json({
       ok: true,
       approvalStatus: b.approvalStatus,
-      note: "Stored as pending/approved adjudicated reference. Validate patients must stay out of this store.",
+      note: "Correction saved for similar future cases. Do not include PHI.",
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed to save correction";
@@ -92,8 +94,7 @@ export async function GET(req: Request) {
     Math.max(1, parseInt(searchParams.get("limit") ?? "30", 10) || 30),
   );
   try {
-    const db = getDb();
-    const rows = listRecentCorrections(db, limit);
+    const rows = listRecentCorrections(limit);
     return Response.json({ corrections: rows, enabled: true });
   } catch (e) {
     return Response.json(

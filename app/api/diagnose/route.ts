@@ -3,6 +3,8 @@ import { runDiagnosisPipeline } from "@/lib/endodontic-agent/run-pipeline";
 import { isCtModuleEnabled } from "@/lib/features";
 
 export const runtime = "nodejs";
+/** Multi-stage LLM calls need a longer budget on hosted platforms. */
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   let body: unknown;

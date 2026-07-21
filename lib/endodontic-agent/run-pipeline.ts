@@ -1,6 +1,5 @@
-import { getDb } from "@/lib/correction-rag/db";
 import { serializeCaseCanonical } from "@/lib/correction-rag/format-case";
-import { searchSimilarCorrections } from "@/lib/correction-rag/search";
+import { searchSimilarCorrections } from "@/lib/correction-rag/store";
 import { createLlmClient } from "@/lib/llm";
 import { loadCurriculum } from "@/lib/prompts/load-curriculum";
 import {
@@ -165,9 +164,8 @@ export async function* runDiagnosisPipeline(
     let ragMatchCount = 0;
     if (!options.skipRag && isCorrectionRagEnabled()) {
       try {
-        const db = getDb();
         const qVec = await llm.embedText(caseBlock);
-        const hits = searchSimilarCorrections(db, qVec, ragTopK());
+        const hits = searchSimilarCorrections(qVec, ragTopK());
         ragMatchCount = hits.length;
         ragContext = formatRagBlock(hits);
         yield {

@@ -199,9 +199,10 @@ export default function Home() {
       <header>
         <h1 className="page-title">Endodontic diagnosis</h1>
         <p className="page-lede">
-          Agentic multi-stage pipeline · taxonomy {TAXONOMY_VERSION} ·
-          correction RAG · can abstain · clinician confirmation required.
-          Educational decision support only — not a medical device.
+          Open this site in any browser — no install. Agentic multi-stage
+          diagnosis · taxonomy {TAXONOMY_VERSION} · correction memory · can
+          abstain · clinician confirmation required. Educational decision
+          support only — not a medical device.
         </p>
         {features ? (
           <p className="page-lede">

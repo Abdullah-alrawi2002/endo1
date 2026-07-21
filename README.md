@@ -1,62 +1,50 @@
 # Endodontic Diagnostic Agent
 
-Next.js web app with an **agentic multi-stage** server pipeline that proposes
-**AAE 2009** pulpal + apical diagnoses from structured clinical findings, plus a
-**local correction RAG** so clinician corrections steer future similar cases.
+Agentic endodontic diagnosis (pulpal + apical) from structured clinical findings,
+with correction RAG so clinician feedback steers future similar cases.
 
 **Educational decision support only** — not a substitute for licensed clinical judgment.
 
-Beginner install: **[SETUP.md](SETUP.md)**.
+---
+
+## For non-technical users — open a link
+
+If the app is already hosted, you only need a browser:
+
+1. Open the shared URL (example: `https://your-app.vercel.app`)
+2. Enter findings → **Run**
+
+No install. See **[SHARE.md](SHARE.md)** for how the host publishes that URL.
+
+Local/advanced setup: **[SETUP.md](SETUP.md)**.
 
 ---
 
-## Features (plan)
+## For the host — publish once, share forever
 
-| Piece | Behavior |
-|-------|----------|
-| Structured clinical form | Cold, EPT, percussion, palpation, PARL + expanded optional fields (controls, validity, abscess signs, confounders) |
-| Stage 0 gate | Scope / sufficiency / abstention before LLM stages |
-| Stages 1–4 | Test biology → pulpal → apical → synthesis JSON (streamed teaching trace) |
-| Deterministic verifier | Rejects forced one-finding rules; may abstain after Stage 4 |
-| Correction RAG | Embed + SQLite cosine top-K; injected before Stage 1 |
-| Output envelope | `diagnosable` / `insufficient_data` / `conflicting_data` / `out_of_scope` |
+1. Push this repo to GitHub.
+2. Deploy to [Vercel](https://vercel.com) (import repo) **or** [Railway](https://railway.app) (Dockerfile).
+3. Set `OPENAI_API_KEY` (and optional `ENDO_MODEL`) in the host dashboard.
+4. Copy the public HTTPS URL and send it to people.
 
-CT/CBCT is an optional research module (`ENABLE_CT_MODULE=true`) and is **off by default**.
-
----
-
-## Run locally
-
-```bash
-git clone https://github.com/YOUR_USERNAME/endo1.git
-cd endo1
-npm install
-cp .env.example .env   # set OPENAI_API_KEY
-npm run dev
-```
-
-Open **http://localhost:3000**
+Details: **[SHARE.md](SHARE.md)**.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `OPENAI_API_KEY` | — | Required |
+| `OPENAI_API_KEY` | — | Required on the server (visitors do not need a key) |
 | `ENDO_MODEL` | `gpt-4o` | Chat model for all stages |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | Correction embeddings |
 | `ENABLE_CORRECTION_RAG` | `true` | Correction memory |
-| `RAG_TOP_K` | `5` | Neighbors retrieved |
-| `CORRECTIONS_DB_PATH` | `data/corrections.db` | Local SQLite |
-| `ENABLE_CT_MODULE` | `false` | Experimental CT |
+| `ENABLE_CT_MODULE` | `false` | Experimental CT (keep off for the shared web app) |
 
 ---
 
 ## How it works
 
-1. **Inputs:** Visual / clinical / imaging findings (core: Cold, EPT, Percussion, Palpation, PARL) with control comparisons and validity.
-2. **Pipeline:** Stage 0 gate → RAG retrieve → Stage 1 biology → Stage 2 pulpal → Stage 3 apical → Stage 4 JSON synthesis → deterministic verifier.
-3. **RAG:** Similar saved corrections are retrieved before Stage 1; curriculum + raw inputs win on hard conflicts.
-4. **Corrections:** After a run, **Submit correction** stores wrong vs right + reasoning for future retrieval.
-
-Curriculum: [`lib/prompts/curriculum.md`](lib/prompts/curriculum.md) · Stage prompts: [`lib/prompts/agent-stages.ts`](lib/prompts/agent-stages.ts).
+1. Structured clinical form (Cold, EPT, Percussion, Palpation, PARL + optional fields).
+2. Stage 0 gate → RAG → Stages 1–4 (biology, pulpal, apical, synthesis) → verifier.
+3. Streaming teaching trace + evidence table + final AAE enums (or abstention).
+4. Optional **Submit correction** saves lessons for similar future cases.
 
 ---
 
@@ -64,18 +52,10 @@ Curriculum: [`lib/prompts/curriculum.md`](lib/prompts/curriculum.md) · Stage pr
 
 | Command | Description |
 |---------|-------------|
-| `npm run dev` | Development server |
-| `npm run build` / `start` | Production |
+| `npm run dev` | Local development |
+| `npm run build` / `start` | Production locally |
 | `npm run lint` | ESLint |
-| `npm run batch -- input.csv output.csv` | Batch CSV — see **[BATCH.md](BATCH.md)** |
-
----
-
-## Privacy
-
-- Do not put patient identifiers in notes or corrections.
-- `data/corrections.db` is local and gitignored.
-- Not a certified EHR.
+| `npm run batch -- input.csv output.csv` | Batch CSV — **[BATCH.md](BATCH.md)** |
 
 ---
 
