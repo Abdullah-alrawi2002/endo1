@@ -227,8 +227,8 @@ export default function Home() {
         />
       ) : (
         <p className="scan-disclaimer">
-          CBCT support is optional/experimental (`ENABLE_CT_MODULE=true`). Off
-          by default; it does not participate in diagnosis unless enabled.
+          CBCT support is off (`ENABLE_CT_MODULE=false`). Use the all-in-one
+          Docker host (see SHARE.md) to run web + CT together on one link.
         </p>
       )}
 

@@ -1,12 +1,6 @@
 import { z } from "zod";
 import { ctSupportSchema, type CTSupport } from "@/lib/schemas/clinical-case";
-
-function sidecarUrl(): string {
-  return (
-    process.env.CT_SIDECAR_URL?.trim().replace(/\/$/, "") ||
-    "http://127.0.0.1:8000"
-  );
-}
+import { getSidecarBaseUrl } from "@/lib/ct-analysis/remote";
 
 /** Sidecar returns a research support payload (no diagnostic lesion flags). */
 const sidecarResponseSchema = ctSupportSchema
@@ -18,6 +12,12 @@ const sidecarResponseSchema = ctSupportSchema
 export async function requestCtAnalysis(
   form: FormData,
 ): Promise<Omit<CTSupport, "analysisId"> & { analysisId?: string }> {
+  const base = getSidecarBaseUrl();
+  if (!base) {
+    throw new Error(
+      "CT_SIDECAR_URL is not set. In the all-in-one Docker image it defaults to http://127.0.0.1:8000.",
+    );
+  }
   const timeoutMs = Number.parseInt(
     process.env.CT_ANALYSIS_TIMEOUT_MS ?? "1800000",
     10,
@@ -26,7 +26,7 @@ export async function requestCtAnalysis(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
-    response = await fetch(`${sidecarUrl()}/analyze`, {
+    response = await fetch(`${base}/analyze`, {
       method: "POST",
       body: form,
       signal: controller.signal,
@@ -37,7 +37,7 @@ export async function requestCtAnalysis(
       throw new Error("CT sidecar timed out while processing the scan");
     }
     throw new Error(
-      `Could not reach CT sidecar at ${sidecarUrl()}: ${
+      `Could not reach CT sidecar at ${base}: ${
         error instanceof Error ? error.message : "connection failed"
       }`,
     );

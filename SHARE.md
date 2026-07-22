@@ -1,107 +1,86 @@
-# Share this app as a normal website link (no install for visitors)
+# Share one link — web app + CT in one place
 
-Visitors should **never** install Node or copy API keys. You (the host) deploy
-once, put your OpenAI key on the server, then send people a URL.
-
----
-
-## For visitors (zero technical knowledge)
-
-1. Open the link your host sent you (looks like `https://….vercel.app`).
-2. Fill in the clinical findings.
-3. Click **Run** (and optionally upload a CT scan if the host enabled it).
-4. No install. Works in Chrome, Safari, or Edge.
+Visitors only need a browser. You deploy **once** to one host and share one URL.
 
 ---
 
-## For the host — basic website (clinical only, no CT)
+## Recommended: all-in-one on Railway (one service, one URL)
 
-### Vercel
+This runs the website **and** the CT processor in a **single Docker container**.
 
-1. [vercel.com](https://vercel.com) → sign in with GitHub → **Add New → Project** → import `endo1`.
-2. **Environment Variables** (before or after first deploy):
+### Steps
+
+1. Push / merge the latest `endo1` code to GitHub.
+2. Go to [railway.app](https://railway.app) → **New Project → Deploy from GitHub** → select **endo1**.
+3. Open the service → **Settings**:
+   - **Builder:** Dockerfile  
+   - **Dockerfile path:** `Dockerfile` (repo root)  
+   - Root directory: leave empty (whole repo)
+4. **Variables** → add:
 
    | Name | Value |
-   |------|-------|
+   |------|--------|
    | `OPENAI_API_KEY` | your OpenAI secret key |
    | `ENDO_MODEL` | `gpt-4o` |
+   | `ENABLE_CT_MODULE` | `true` |
    | `ENABLE_CORRECTION_RAG` | `true` |
-   | `ENABLE_CT_MODULE` | `false` |
 
-3. **Deploy** → copy the `https://….vercel.app` URL and share it.
+   (CT sidecar URL is already set inside the image to `http://127.0.0.1:8000`.)
 
-You pay OpenAI for everyone's usage. Do not put patient identifiers in the app.
+5. **Settings → Networking → Generate Domain**.
+6. Wait for deploy to finish. Open the Railway URL.
+7. You should see **CT module: on** and the DICOM upload section.
+8. Send that **one** URL to everyone.
+
+Optional: add a **Volume** mounted at `/data` so corrections and CT results persist across restarts.
+
+### Local all-in-one (same image)
+
+```bash
+cp .env.example .env   # set OPENAI_API_KEY
+docker compose up --build
+```
+
+Open **http://localhost:3000**
 
 ---
 
-## For the host — website **with CT upload for everyone**
+## For visitors
 
-CT needs **two** hosted pieces:
+1. Open the link you sent them.
+2. Fill findings → optionally upload CT → **Run**.
+3. No install. No API key on their device.
 
-| Piece | Where | What it does |
-|-------|--------|----------------|
-| Web app | **Vercel** | Form, diagnosis, link you share |
-| CT processor | **Railway** | Accepts DICOM/ZIP (large files) |
+---
 
-Vercel cannot process large DICOM files itself. The browser uploads **directly** to Railway.
+## Alternative: Vercel-only (clinical, no CT)
 
-### Step 1 — Deploy the CT processor on Railway
+Vercel cannot run the Python CT engine in the same project. Clinical-only:
 
-1. Go to [railway.app](https://railway.app) → **New Project → Deploy from GitHub repo** → select `endo1`.
-2. Open the new service → **Settings**:
-   - **Root Directory:** `ct-sidecar`
-   - **Builder:** Dockerfile (Railway should pick up `ct-sidecar/Dockerfile`)
-3. **Variables** tab → add:
+| Name | Value |
+|------|--------|
+| `OPENAI_API_KEY` | your key |
+| `ENABLE_CT_MODULE` | `false` |
 
-   | Name | Value |
-   |------|-------|
-   | `OPENAI_API_KEY` | same key as Vercel (optional; only for MPR vision screen) |
-   | `CT_ALLOWED_ORIGINS` | `https://YOUR-VERCEL-URL.vercel.app` (replace with your real Vercel URL; no trailing slash) |
-   | `CT_ANALYSIS_STORE_PATH` | `/data/ct-analyses` |
+Import the repo at [vercel.com](https://vercel.com). Share the `*.vercel.app` link.
 
-4. **Settings → Networking → Generate Domain** → copy the public URL, e.g.  
-   `https://endo1-ct-production.up.railway.app`
-5. Wait until deploy is green. Test: open `https://YOUR-RAILWAY-URL/health` — should show `{"status":"ok"}`.
+If you later want CT on Vercel, you must add a second CT host (see older split setup). Prefer the Railway all-in-one instead.
 
-**Optional but recommended:** add a **Volume** mounted at `/data` so CT results survive restarts (Railway → service → Volumes).
+---
 
-**Note:** Full DentalSegmentator segmentation needs large model weights and may not fit free Railway tiers. Upload UI still works; analysis may return `partial` until models are installed.
-
-### Step 2 — Connect Vercel to the CT processor
-
-1. Vercel → your project → **Settings → Environment Variables** → add or edit:
-
-   | Name | Value |
-   |------|-------|
-   | `ENABLE_CT_MODULE` | `true` |
-   | `CT_SIDECAR_URL` | `https://YOUR-RAILWAY-URL` (same Railway domain, **no** trailing slash) |
-
-   Keep `OPENAI_API_KEY` and the other vars from the basic setup.
-
-2. **Deployments → ⋯ → Redeploy** (required after env changes).
-
-### Step 3 — Verify
-
-1. Open your Vercel URL.
-2. Near the top you should see **CT module: on**.
-3. Below the case form: **CT support (experimental / non-diagnostic)** with file upload.
-4. If you see “CT processor URL missing”, `CT_SIDECAR_URL` is wrong or you forgot to redeploy.
-
-### Troubleshooting CT on the live link
+## Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
-| No upload section | `ENABLE_CT_MODULE=true` on Vercel + **Redeploy** |
-| “CT processor URL missing” | Set `CT_SIDECAR_URL` to Railway URL + redeploy |
-| Upload fails / CORS error | Set `CT_ALLOWED_ORIGINS` on Railway to your exact Vercel URL |
-| “Could not reach CT sidecar” | Railway service not running; check `/health` |
-| Upload works but Run fails | Railway volume or store path; ensure `CT_ANALYSIS_STORE_PATH` is writable |
+| Site up but no CT upload | Set `ENABLE_CT_MODULE=true` and redeploy |
+| CT upload errors / sidecar unreachable | Check Railway logs for `ct-sidecar` and `web` both running |
+| Deploy OOM / build fails | Use a larger Railway plan; CT deps are heavy |
+| Segmentation always `partial` | Install DentalSegmentator weights into `/models` (optional volume) |
 
 ---
 
-## Security notes
+## Security
 
-- Never commit `.env` or paste API keys into GitHub.
-- Rotate keys if they leak.
+- Never commit `.env` or paste keys into GitHub.
 - Educational decision support only — not a certified medical device.
-- Do not upload identifiable patient DICOM to shared hosts without proper agreements.
+- Avoid identifiable patient DICOM on shared hosts without proper agreements.

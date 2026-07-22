@@ -1,7 +1,7 @@
 /**
  * Feature flags.
- * Correction RAG is ON by default (core plan feature); set ENABLE_CORRECTION_RAG=false to disable.
- * CT support remains experimental and OFF unless ENABLE_CT_MODULE=true.
+ * Correction RAG is ON by default.
+ * CT is ON when ENABLE_CT_MODULE=true (default true in the all-in-one Docker image).
  */
 export function isCtModuleEnabled(): boolean {
   return process.env.ENABLE_CT_MODULE?.trim().toLowerCase() === "true";
