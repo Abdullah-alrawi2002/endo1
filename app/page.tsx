@@ -206,6 +206,11 @@ export default function Home() {
           abstain · clinician confirmation required. Educational decision
           support only — not a medical device.
         </p>
+        <p className="page-lede">
+          Separate product:{" "}
+          <a href="/ecr">ECR CBCT Patel classification</a> (CBCT-only
+          external cervical resorption analysis).
+        </p>
         {features ? (
           <p className="page-lede">
             Correction RAG: {features.correctionRagEnabled ? "on" : "off"} · CT

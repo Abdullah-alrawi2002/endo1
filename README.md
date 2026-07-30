@@ -9,9 +9,15 @@ optional CT research support and correction RAG.
 
 ## System design
 
-Full architecture, clinical contract, pipeline, CT/RAG, APIs, and deployment:
+- AAE clinical agent: **[SYSTEM_DESIGN.md](SYSTEM_DESIGN.md)**
+- ECR CBCT (Patel) product: **[docs/ECR_CBCT_SYSTEM.md](docs/ECR_CBCT_SYSTEM.md)** · UI at `/ecr`
 
-→ **[SYSTEM_DESIGN.md](SYSTEM_DESIGN.md)**
+## Products
+
+| Product | Path | Evidence |
+|---------|------|----------|
+| AAE clinical diagnostic agent | `/` | Structured clinical findings (+ optional CT research) |
+| ECR CBCT Patel classifier | `/ecr` | CBCT-only measurements → Patel code + conditional options |
 
 ## One link for everyone (recommended)
 

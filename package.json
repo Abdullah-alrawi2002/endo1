@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test:ecr": "tsx scripts/test-ecr.mts",
     "batch": "tsx --env-file=.env scripts/batch-diagnose.mts",
     "app:up": "docker compose up --build",
     "app:down": "docker compose down",
