@@ -7,6 +7,12 @@ optional CT research support and correction RAG.
 
 ---
 
+## System design
+
+Full architecture, clinical contract, pipeline, CT/RAG, APIs, and deployment:
+
+→ **[SYSTEM_DESIGN.md](SYSTEM_DESIGN.md)**
+
 ## One link for everyone (recommended)
 
 Deploy **web + CT together** on Railway (single Docker service):
