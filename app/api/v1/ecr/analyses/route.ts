@@ -7,69 +7,15 @@ import {
   setEcrResult,
 } from "@/lib/ecr/store";
 import { runEcrPipeline } from "@/lib/ecr/pipeline";
+import { buildIntegratedPlan } from "@/lib/integration/build-integrated-plan";
 import {
   ecrAnalysisCreateSchema,
-  ecrMeasurementInputSchema,
-  type EcrMeasurementInput,
 } from "@/lib/ecr/schemas";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
-function demoMeasurements(toothLabel: string): EcrMeasurementInput {
-  return ecrMeasurementInputSchema.parse({
-    toothLabel,
-    rootsAffected: ["single_root"],
-    mostApicalExtentMmFromCEJ: 4.8,
-    rootLengthCejToApexMm: 16,
-    localCrestDistanceMmFromCEJ: 2.0,
-    maximumCircumferenceDegrees: 142,
-    minimumLesionCanalSeparationMm: 0,
-    separationUncertaintyLowerBoundMm: 0,
-    lesionCanalContactOrIntersection: true,
-    continuousDentineBarrierVisible: false,
-    ecrDifferential: "appearance_consistent_with_ecr",
-    maskReviewStatus: "clinician_reviewed",
-    scan: {
-      qualityStatus: "pass",
-      oodStatus: "in_domain",
-      nativeVoxelMm: [0.2, 0.2, 0.2],
-      fovCompleteForTarget: true,
-      targetStructuresVisible: {
-        crownRootComplex: true,
-        cejRegion: true,
-        localAlveolarCrest: true,
-        apex: true,
-        canalBoundaryNearLesion: true,
-        lesionMargins: true,
-      },
-      artifactWarnings: [],
-      qualityGateFailures: [],
-    },
-    planning: {
-      portalSurface: "buccal",
-      portalAreaMm2: 3.1,
-      portalSupracrestal: "present",
-      lesionVolumeMm3: 18.4,
-      lesionMaxDepthMm: 2.2,
-      lesionMaxWidthMm: 3.0,
-      externalAccessProxy: "favorable",
-      internalAccessProxy: "possible",
-      structuralContinuity: "reduced",
-      furcationInvolvement: "not_applicable",
-      boneCrestLossProxy: "present",
-      adjacentAnatomyWarnings: [],
-      existingTreatmentFindings: [],
-      fractureRiskProxy: "moderate",
-      rootFormForReplantation: "compatible",
-    },
-    portalSurface: "buccal",
-    portalAreaMm2: 3.1,
-    lesionVolumeMm3: 18.4,
-  });
-}
-
-/** POST /api/v1/ecr/analyses — create analysis from measurements (Phase-1). */
+/** POST /api/v1/ecr/analyses — create analysis from reviewed measurements. */
 export async function POST(req: Request) {
   let body: unknown;
   try {
@@ -86,6 +32,16 @@ export async function POST(req: Request) {
     );
   }
 
+  if (!parsed.data.measurements) {
+    return NextResponse.json(
+      {
+        error:
+          "measurements required — demo/fabricated measurements are disabled. Provide clinician-reviewed CBCT measurements.",
+      },
+      { status: 400 },
+    );
+  }
+
   let job = createEcrJob({ jobStatus: "running" });
   job = appendAudit(job, {
     actor: "api",
@@ -94,9 +50,77 @@ export async function POST(req: Request) {
   });
 
   try {
-    const measurements =
-      parsed.data.measurements ?? demoMeasurements(parsed.data.toothLabel);
+    const measurements = parsed.data.measurements;
     measurements.toothLabel = parsed.data.toothLabel;
+
+    const useAgentNetwork =
+      process.env.ENDO_ECR_AGENT_NETWORK === "1" ||
+      process.env.ENDO_ECR_AGENT_NETWORK === "true" ||
+      (body as { useAgentNetwork?: boolean }).useAgentNetwork === true;
+
+    if (useAgentNetwork) {
+      const integrated = await buildIntegratedPlan({
+        caseId: job.analysisId,
+        measurements,
+        ecrAnalysisId: job.analysisId,
+      });
+      // Also persist deterministic Phase-1 result for compatibility
+      const result = runEcrPipeline(measurements, job.analysisId);
+      result.warnings = [
+        ...result.warnings,
+        ...integrated.patelNetwork.warnings,
+        `Agent-network code: ${integrated.patelNetwork.code ?? "null"} (decisionSource=${integrated.patelNetwork.decisionSource})`,
+        `Deterministic reference (hidden from agents): ${integrated.deterministicReferenceCode ?? "null"}`,
+        `Plan status: ${integrated.provisionalPlan.planStatus}`,
+      ];
+      // Prefer agent-network code when complete; keep deterministic components for audit
+      if (
+        integrated.patelNetwork.code &&
+        integrated.patelNetwork.classificationStatus === "complete"
+      ) {
+        result.patel = {
+          ...result.patel,
+          code: integrated.patelNetwork.code,
+          manualReviewRequired:
+            result.patel.manualReviewRequired ||
+            integrated.patelNetwork.requiresSpecialistReview,
+        };
+      } else if (integrated.patelNetwork.requiresSpecialistReview) {
+        result.patel = {
+          ...result.patel,
+          status: "abstained",
+          code: null,
+          manualReviewRequired: true,
+        };
+      }
+
+      const completed = setEcrResult(
+        job,
+        result,
+        result.patel.code ? "completed" : "abstained",
+      );
+      saveEcrJob(
+        appendAudit(completed, {
+          actor: "system",
+          action: "agent_network_completed",
+          detail: integrated.evidenceHash,
+        }),
+      );
+
+      return NextResponse.json({
+        analysisId: completed.analysisId,
+        jobStatus: completed.jobStatus,
+        result: completed.result,
+        unifiedCase: integrated.unified,
+        patelNetwork: {
+          ...integrated.patelNetwork,
+          // Strip hidden reference from client-facing agent payload? Keep for research UI audit panel.
+        },
+        provisionalPlan: integrated.provisionalPlan,
+        notice:
+          "CBCT-derived ECR classification and treatment-planning options — not a definitive treatment plan. Agents received evidence only; deterministic classifier used as invisible verifier.",
+      });
+    }
 
     const result = runEcrPipeline(measurements, job.analysisId);
     const completed = setEcrResult(

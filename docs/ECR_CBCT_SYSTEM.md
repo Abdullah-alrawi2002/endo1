@@ -1,13 +1,11 @@
-# ECR CBCT System Design (ECR-CBCT 1.0)
+# ECR CBCT System Design (ECR-CBCT / ENDO_ECR_AGENTS_3.0)
 
-Separate product from the AAE clinical diagnostic agent.
+Separate product from the AAE clinical diagnostic agent, optionally fused via `UnifiedCase`.
 
-**Evidence scope:** CBCT only  
+**Evidence scope:** CBCT only for Patel classification  
 **Classification:** Patel three-dimensional external cervical resorption  
 **Status:** Research/educational decision support; specialist confirmation required  
-**Phase implemented:** Phase 1 — reliable semiautomated MVP (measurement-driven)
-
-Full product intent is defined in the user specification (ECR-CBCT 1.0). This document maps that design to the code that ships today.
+**Phases:** Phase-1 measurement-driven geometry + ENDO_ECR_AGENTS_3.0 evidence-first LLM network
 
 ---
 
@@ -17,45 +15,68 @@ Full product intent is defined in the user specification (ECR-CBCT 1.0). This do
 |--------------------------|---------------------------|
 | Clinical tests + imaging | CBCT-derived measurements only |
 | AAE pulpal/apical enums | Patel height × circumference × canal proximity |
-| LLM proposes; verifier gates | Deterministic geometry + rules; no LLM on classification path |
-| Optional CT as non-diagnostic support | CBCT is the sole evidence source |
+| Independent pulpal/apical/mimic + critic | Evidence package → three Patel agents → adjudicator → critic → deterministic verifier |
+| Optional CT as non-diagnostic support | CBCT is the sole evidence source for Patel |
+
+**Integration walls** (`lib/schemas/unified-case.ts`):
+
+- Clinical diagnosis may influence the RCT branch.
+- Clinical diagnosis cannot change the Patel code.
+- Patel `p` cannot enter the pulpal agent’s evidence.
+- CBCT cannot establish vitality.
+- Without clinical evidence → `provisional_cbct_based`; with both verified → `provisional_integrated`.
 
 Do not apply Patel codes to non-cervical resorption. Differentials abstain.
 
 ---
 
-## Phase-1 architecture
+## Research comparison design
+
+Agents receive **underlying CBCT evidence**, not precomputed Patel classes. The deterministic classifier is an **invisible reference / safety verifier**.
 
 ```text
-Clinician measurement / mask review form
+Reviewed ECR measurements
         │
         ▼
-POST /api/v1/ecr/analyses
-        │
-        ├─ Patel geometry engine (height, circumference, d/p)
-        ├─ Deterministic verifier (quality, differential, consistency)
-        └─ Evidence-versioned option engine (ESE_RR_2023_CORRECTED_v1)
+Immutable evidence package (caseEvidenceHash)
         │
         ▼
-Structured ECR_CBCT_1.0 JSON + text report
+Three independent Patel agents (height / circumference / canal)
         │
         ▼
-Specialist review (confirm / modify / abstain / refer)
+LLM adjudicator → Independent critic
+        │
+        ▼
+Deterministic verifier (hidden reference)
+        │
+        ▼
+Treatment-agent network (overlapping ESE options)
+        │
+        ▼
+Provisional plan + clinician review
 ```
 
-### Code map
+Comparison arms: deterministic classifier · single LLM · multi-agent LLM network · specialist reference.
+
+---
+
+## Code map
 
 | Path | Role |
 |------|------|
-| `lib/ecr/schemas.ts` | ECR_CBCT_1.0 Zod contract |
-| `lib/ecr/geometry/patel.ts` | Deterministic Patel axes |
+| `lib/ecr/evidence/build-evidence-package.ts` | Immutable evidence package (no codes) |
+| `lib/ecr/evidence/evidence-hash.ts` | Stable `caseEvidenceHash` |
+| `lib/ecr/agents/*` | Patel + treatment agent network |
+| `lib/ecr/geometry/patel.ts` | Deterministic Patel axes (verifier reference) |
 | `lib/ecr/rules/verifier.ts` | Accept / reject / abstain |
-| `lib/ecr/rules/treatment-options.ts` | Multilabel conditional options |
-| `lib/ecr/pipeline.ts` | Measurement → verified result |
-| `lib/ecr/store.ts` | Analysis jobs + audit trail |
-| `app/ecr/page.tsx` | Review UI |
-| `app/api/v1/ecr/**` | API surface |
-| `scripts/test-ecr.mts` | Boundary / safety tests |
+| `lib/ecr/rules/treatment-options.ts` | Multilabel conditional ESE options |
+| `lib/integration/build-integrated-plan.ts` | Unified clinical + ECR plan |
+| `lib/schemas/unified-case.ts` | Shared domain object |
+| `scripts/test-ecr.mts` | Boundary / safety / agent tests |
+
+Set `ENDO_ECR_AGENT_NETWORK=1` or `useAgentNetwork: true` on `POST /api/v1/ecr/analyses` to run the agent network. `ENDO_ECR_SKIP_LLM=1` uses offline evidence interpreters for CI (still from measurements only — no answer injection into prompts).
+
+Measurements are **required** — fabricated demo measurements are disabled.
 
 ---
 
@@ -63,43 +84,26 @@ Specialist review (confirm / modify / abstain / refer)
 
 1. Output label always states CBCT-derived options are **not** a definitive treatment plan.
 2. `definitiveTreatmentPlanAvailable` is always `false`.
-3. No Patel code unless differential is `appearance_consistent_with_ecr` and all three axes complete.
-4. Borderline measurements set `manualReviewRequired` and retain plausible values.
-5. `p` means probable pulpal involvement **on imaging**, not pulp necrosis / AAE pulpal diagnosis.
-6. Option cards always list clinical confirmation prerequisites.
-7. No DICOM pixels are sent to an LLM (LLM is not on the classification path).
-
----
-
-## API
-
-| Route | Method | Purpose |
-|-------|--------|---------|
-| `/api/v1/ecr/analyses` | POST/GET | Create / list |
-| `/api/v1/ecr/analyses/{id}` | GET | Job + result |
-| `/api/v1/ecr/analyses/{id}/recalculate` | POST | Re-run after corrections |
-| `/api/v1/ecr/analyses/{id}/review` | POST | Specialist decision |
-| `/api/v1/ecr/analyses/{id}/report` | GET | JSON or text report |
-| `/api/v1/ecr/rulesets` | GET | Active rules metadata |
-| `/api/v1/ecr/models` | GET | Deployed model cards |
-
----
-
-## Roadmap (not yet implemented)
-
-- Phase 2: task-specific assisted segmentation + OHIF/Cornerstone viewer  
-- Phase 3: ECR detection/differential CNN with external validation  
-- Phase 4: prospective silent-mode and monitored deployment  
-- AuthN/Z, Orthanc/DICOMweb, Redis workers, PostgreSQL audit (institutional)
-
-Phase-1 intentionally uses clinician-reviewed measurements so geometry and rules can be validated without claiming a generic segmenter identifies ECR.
+3. No Patel code unless differential is `appearance_consistent_with_ecr` and quality/mask gates pass.
+4. Unreviewed masks → **abstain** (not warn).
+5. `p` means probable pulpal involvement **on imaging**, not pulp necrosis.
+6. Component agents never see deterministic codes, categories, or peer conclusions.
+7. Treatment synthesizer preserves overlapping alternatives (e.g. `2Bp`).
+8. Correction RAG retrieves only `approvalStatus===approved`, current taxonomy, `reviewerCount>=2`, `containsPHI===false`.
+9. CT sidecar stays isolated — no relative apical density override, no generic segmenter → ECR, no gray values as HU.
 
 ---
 
 ## Tests
 
 ```bash
-npm run test:ecr
+ENDO_ECR_SKIP_LLM=1 npm run test:ecr
 ```
 
-Covers circumference boundaries (90/180/270), height thirds/crest, d/p topology, differential abstention, code consistency, overlapping options, and no definitive-plan flag.
+Covers 90/180/270° boundaries, uncertainty intervals, height crest/thirds, d/p, quality/differential abstention, forged evidence IDs, stale hashes, overlapping treatment options, RAG governance, and integration walls.
+
+---
+
+## Deployment note
+
+Docker/supervisord is fine for demonstration. Before multi-user DICOM: auth/RBAC, PostgreSQL, encrypted object storage, durable workflows, idempotency keys, evidence checksums, audit log, `store: false` on privacy-sensitive model calls, and pinned model/prompt versions (do not silently switch mid-analysis).

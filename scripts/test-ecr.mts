@@ -263,3 +263,343 @@ assert.equal(full.evidenceScope, "CBCT_ONLY");
 assert.equal(full.review.specialistConfirmationRequired, true);
 
 console.log("ecr-geometry-and-rules: all assertions passed");
+
+// --- Mask review must abstain (not warn) ---
+{
+  const unreviewed = verifyEcrAnalysis({
+    scan: baseInput().scan,
+    ecrStatus: "appearance_consistent_with_ecr",
+    maskReviewStatus: "proposed",
+    patel,
+  });
+  assert.equal(unreviewed.mayRankOptions, false);
+  assert.ok(unreviewed.issues.some((i) => i.code === "masks_unreviewed" && i.severity === "abstain"));
+}
+
+// --- Evidence package + Patel agent network (offline) ---
+process.env.ENDO_ECR_SKIP_LLM = "1";
+
+const { buildEvidencePackage, heightEvidenceView, recomputeEvidenceHash } =
+  await import("../lib/ecr/evidence/build-evidence-package");
+const { runPatelNetwork } = await import("../lib/ecr/agents/run-patel-network");
+const { runTreatmentAgentNetwork } = await import(
+  "../lib/ecr/agents/run-treatment-network"
+);
+const { buildIntegratedPlan } = await import(
+  "../lib/integration/build-integrated-plan"
+);
+const { isEligibleForPromptRetrieval } = await import(
+  "../lib/correction-rag/store"
+);
+const { sha256EvidenceHash } = await import("../lib/ecr/evidence/evidence-hash");
+
+const m2Bp = baseInput({
+  mostApicalExtentMmFromCEJ: 4.8,
+  maximumCircumferenceDegrees: 142,
+  lesionCanalContactOrIntersection: true,
+  continuousDentineBarrierVisible: false,
+  minimumLesionCanalSeparationMm: 0,
+  separationUncertaintyLowerBoundMm: 0,
+});
+const pkg = buildEvidencePackage({ measurements: m2Bp });
+assert.match(pkg.caseEvidenceHash, /^sha256:[a-f0-9]{64}$/);
+assert.equal(recomputeEvidenceHash(pkg), pkg.caseEvidenceHash);
+assert.ok(!("code" in pkg.measurements));
+assert.ok(JSON.stringify(pkg).indexOf("2Bp") === -1);
+
+const heightView = heightEvidenceView(pkg);
+assert.ok(!("patelCode" in heightView));
+assert.ok(!JSON.stringify(heightView).match(/"code"\s*:/));
+assert.ok(heightView.prohibited.includes("peer_component_conclusion"));
+assert.ok(heightView.prohibited.includes("deterministic_patel_code"));
+
+// Exact boundaries via network
+for (const [angle, letter] of [
+  [90, "A"],
+  [180, "B"],
+  [270, "C"],
+] as const) {
+  const net = await runPatelNetwork({
+    evidence: buildEvidencePackage({
+      measurements: baseInput({
+        maximumCircumferenceDegrees: angle,
+        lesionCanalContactOrIntersection: false,
+        continuousDentineBarrierVisible: true,
+        minimumLesionCanalSeparationMm: 0.5,
+        separationUncertaintyLowerBoundMm: 0.4,
+      }),
+    }),
+    measurements: baseInput({
+      maximumCircumferenceDegrees: angle,
+      lesionCanalContactOrIntersection: false,
+      continuousDentineBarrierVisible: true,
+      minimumLesionCanalSeparationMm: 0.5,
+      separationUncertaintyLowerBoundMm: 0.4,
+    }),
+  });
+  assert.equal(net.circumference.value, letter, `angle ${angle}`);
+  assert.equal(net.deterministicCompatibility, "passed");
+}
+
+// Uncertainty interval crossing 180°
+{
+  const measurements = baseInput({
+    maximumCircumferenceDegrees: 179,
+    lesionCanalContactOrIntersection: false,
+    continuousDentineBarrierVisible: true,
+    minimumLesionCanalSeparationMm: 0.5,
+    separationUncertaintyLowerBoundMm: 0.4,
+  });
+  const evidence = buildEvidencePackage({
+    measurements,
+    circumferenceUncertaintyDegrees: 3,
+  });
+  const net = await runPatelNetwork({ evidence, measurements });
+  assert.ok(
+    net.circumference.borderline ||
+      net.componentAgents.some(
+        (a) =>
+          a.agentRole === "patel_circumference" && a.uncertainties.length > 0,
+      ),
+  );
+}
+
+// Height above/below crest
+{
+  const below = await runPatelNetwork({
+    evidence: buildEvidencePackage({
+      measurements: baseInput({
+        mostApicalExtentMmFromCEJ: 1.5,
+        localCrestDistanceMmFromCEJ: 2,
+      }),
+    }),
+    measurements: baseInput({
+      mostApicalExtentMmFromCEJ: 1.5,
+      localCrestDistanceMmFromCEJ: 2,
+    }),
+  });
+  assert.equal(below.height.value, 1);
+
+  const above = await runPatelNetwork({
+    evidence: buildEvidencePackage({
+      measurements: baseInput({
+        mostApicalExtentMmFromCEJ: 3,
+        localCrestDistanceMmFromCEJ: 2,
+        rootLengthCejToApexMm: 15,
+      }),
+    }),
+    measurements: baseInput({
+      mostApicalExtentMmFromCEJ: 3,
+      localCrestDistanceMmFromCEJ: 2,
+      rootLengthCejToApexMm: 15,
+    }),
+  });
+  assert.equal(above.height.value, 2);
+}
+
+// d/p contact and barrier
+{
+  const contact = await runPatelNetwork({
+    evidence: buildEvidencePackage({ measurements: m2Bp }),
+    measurements: m2Bp,
+  });
+  assert.equal(contact.canalProximity.value, "p");
+  assert.equal(contact.code, "2Bp");
+  assert.ok(!/necrosis/i.test(JSON.stringify(contact.componentAgents)));
+
+  const barrierM = baseInput({
+    lesionCanalContactOrIntersection: false,
+    continuousDentineBarrierVisible: true,
+    minimumLesionCanalSeparationMm: 0.6,
+    separationUncertaintyLowerBoundMm: 0.5,
+    maximumCircumferenceDegrees: 120,
+  });
+  const barrier = await runPatelNetwork({
+    evidence: buildEvidencePackage({ measurements: barrierM }),
+    measurements: barrierM,
+  });
+  assert.equal(barrier.canalProximity.value, "d");
+}
+
+// Missing quality / non-ECR
+{
+  const failM = baseInput({
+    scan: { ...baseInput().scan, qualityStatus: "fail" },
+  });
+  const failNet = await runPatelNetwork({
+    evidence: buildEvidencePackage({ measurements: failM }),
+    measurements: failM,
+  });
+  assert.ok(
+    failNet.requiresSpecialistReview ||
+      failNet.classificationStatus === "abstained" ||
+      failNet.classificationStatus === "needs_specialist_review",
+  );
+
+  const cariesM = baseInput({ ecrDifferential: "caries_more_likely" });
+  const cariesNet = await runPatelNetwork({
+    evidence: buildEvidencePackage({ measurements: cariesM }),
+    measurements: cariesM,
+  });
+  assert.ok(
+    cariesNet.classificationStatus === "abstained" ||
+      cariesNet.requiresSpecialistReview ||
+      cariesNet.classificationStatus === "needs_specialist_review",
+  );
+}
+
+// Agent citation of nonexistent evidence
+{
+  const { verifyPatelNetwork } = await import(
+    "../lib/ecr/agents/verify-patel-network"
+  );
+  const evidence = buildEvidencePackage({ measurements: m2Bp });
+  const forged = {
+    agentRole: "patel_height" as const,
+    agentContractVersion: "3.0" as const,
+    promptVersion: "test",
+    modelId: "test",
+    caseEvidenceHash: evidence.caseEvidenceHash,
+    status: "complete" as const,
+    conclusion: 2 as const,
+    alternatives: [],
+    evidenceIds: ["eh_FORGED_NOT_REAL"],
+    conciseRationale: "forged",
+    uncertainties: [],
+    abstain: false,
+  };
+  const v = verifyPatelNetwork({
+    evidence,
+    measurements: m2Bp,
+    components: [forged],
+    adjudicator: null,
+    critic: null,
+    reevaluationUsed: false,
+  });
+  assert.ok(v.issues.some((i) => /nonexistent evidence/i.test(i.message)));
+}
+
+// Stale evidence after measurement edits
+{
+  const evidence = buildEvidencePackage({ measurements: m2Bp });
+  const tampered = {
+    ...evidence,
+    measurements: {
+      ...evidence.measurements,
+      maximumCircumferenceDegrees: 300,
+    },
+  };
+  assert.notEqual(recomputeEvidenceHash(tampered), evidence.caseEvidenceHash);
+}
+
+// Treatment network: overlapping alternatives for 2Bp; never definitive
+{
+  const evidence = buildEvidencePackage({ measurements: m2Bp });
+  const network = await runPatelNetwork({ evidence, measurements: m2Bp });
+  const plan = runTreatmentAgentNetwork({
+    evidence,
+    network,
+    measurements: m2Bp,
+  });
+  assert.equal(plan.definitiveTreatmentPlanAvailable, false);
+  assert.equal(plan.planStatus, "provisional_cbct_based");
+  assert.ok(plan.requiredClinicalConfirmations.length > 0);
+  assert.ok(
+    plan.candidates.length + plan.alternativeStrategies.length >= 1,
+  );
+  // No unconditional extraction/RCT from CBCT alone
+  assert.ok(
+    plan.candidates.every((c) => c.requiredClinicalConfirmations.length > 0),
+  );
+}
+
+// Integrated plan walls
+{
+  const integrated = await buildIntegratedPlan({ measurements: m2Bp });
+  assert.equal(integrated.unified.walls?.cbctCannotEstablishVitality, true);
+  assert.equal(integrated.unified.walls?.clinicalCannotChangePatelCode, true);
+  assert.equal(
+    integrated.unified.treatmentFeasibility?.vitalityEstablishedByCbct,
+    false,
+  );
+  assert.equal(
+    integrated.unified.treatmentFeasibility?.patelPUsedAsPulpNecrosis,
+    false,
+  );
+  assert.equal(
+    integrated.unified.treatmentFeasibility?.clinicalMayAlterPatelCode,
+    false,
+  );
+  assert.equal(integrated.provisionalPlan.planStatus, "provisional_cbct_based");
+}
+
+// Correction RAG governance
+assert.equal(
+  isEligibleForPromptRetrieval({
+    id: "x",
+    createdAt: 0,
+    caseCanonical: "",
+    agentPulpal: "",
+    agentApical: "",
+    correctedPulpal: "",
+    correctedApical: "",
+    reasoning: "",
+    misunderstood: null,
+    embedDocument: "",
+    embeddingDim: 0,
+    approvalStatus: "evaluation_only",
+    taxonomyVersion: "AAE_2009",
+    reviewerCount: 2,
+    containsPHI: false,
+  }),
+  false,
+);
+assert.equal(
+  isEligibleForPromptRetrieval({
+    id: "x",
+    createdAt: 0,
+    caseCanonical: "",
+    agentPulpal: "",
+    agentApical: "",
+    correctedPulpal: "",
+    correctedApical: "",
+    reasoning: "",
+    misunderstood: null,
+    embedDocument: "",
+    embeddingDim: 0,
+    approvalStatus: "approved",
+    taxonomyVersion: "AAE_2009",
+    reviewerCount: 2,
+    containsPHI: false,
+  }),
+  true,
+);
+assert.equal(
+  isEligibleForPromptRetrieval({
+    id: "x",
+    createdAt: 0,
+    caseCanonical: "",
+    agentPulpal: "",
+    agentApical: "",
+    correctedPulpal: "",
+    correctedApical: "",
+    reasoning: "",
+    misunderstood: null,
+    embedDocument: "",
+    embeddingDim: 0,
+    approvalStatus: "approved",
+    taxonomyVersion: "AAE_2009",
+    reviewerCount: 1,
+    containsPHI: false,
+  }),
+  false,
+);
+
+// Hash stability
+{
+  const a = sha256EvidenceHash({ x: 1, y: [2, 3] });
+  const b = sha256EvidenceHash({ y: [2, 3], x: 1 });
+  assert.equal(a, b);
+}
+
+console.log("ecr-agent-network-and-governance: all assertions passed");

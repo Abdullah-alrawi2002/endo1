@@ -1,6 +1,13 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "fs";
 import { dirname, join } from "path";
 import { blobToFloat32, embeddingToBlob } from "@/lib/correction-rag/embed";
+import { TAXONOMY_VERSION } from "@/lib/schemas/clinical-case";
+
+export type CorrectionApprovalStatus =
+  | "pending_review"
+  | "approved"
+  | "rejected"
+  | "evaluation_only";
 
 export type CorrectionRow = {
   id: string;
@@ -14,6 +21,11 @@ export type CorrectionRow = {
   misunderstood: string | null;
   embedDocument: string;
   embeddingDim: number;
+  /** Governance — required before retrieval into prompt context. */
+  approvalStatus: CorrectionApprovalStatus;
+  taxonomyVersion: string;
+  reviewerCount: number;
+  containsPHI: boolean;
 };
 
 export type CorrectionInsert = Omit<CorrectionRow, "embeddingDim"> & {
@@ -26,12 +38,19 @@ type StoredCorrection = CorrectionRow & {
 };
 
 type StoreFile = {
-  version: 1;
+  version: 2;
   corrections: StoredCorrection[];
 };
 
 type GlobalStore = typeof globalThis & {
   __endoCorrectionStore?: StoreFile;
+};
+
+export type CorrectionRetrieveFilter = {
+  approvalStatus?: CorrectionApprovalStatus;
+  taxonomyVersion?: string;
+  minReviewerCount?: number;
+  allowPhi?: boolean;
 };
 
 function cosineSimilarity(a: Float32Array, b: Float32Array): number {
@@ -61,7 +80,33 @@ function storePath(): string {
 }
 
 function emptyStore(): StoreFile {
-  return { version: 1, corrections: [] };
+  return { version: 2, corrections: [] };
+}
+
+function migrateRow(raw: Record<string, unknown>): StoredCorrection | null {
+  if (!raw || typeof raw.id !== "string" || typeof raw.embeddingB64 !== "string") {
+    return null;
+  }
+  return {
+    id: raw.id,
+    createdAt: Number(raw.createdAt) || 0,
+    caseCanonical: String(raw.caseCanonical ?? ""),
+    agentPulpal: String(raw.agentPulpal ?? ""),
+    agentApical: String(raw.agentApical ?? ""),
+    correctedPulpal: String(raw.correctedPulpal ?? ""),
+    correctedApical: String(raw.correctedApical ?? ""),
+    reasoning: String(raw.reasoning ?? ""),
+    misunderstood:
+      raw.misunderstood == null ? null : String(raw.misunderstood),
+    embedDocument: String(raw.embedDocument ?? ""),
+    embeddingDim: Number(raw.embeddingDim) || 0,
+    approvalStatus:
+      (raw.approvalStatus as CorrectionApprovalStatus) ?? "pending_review",
+    taxonomyVersion: String(raw.taxonomyVersion ?? TAXONOMY_VERSION),
+    reviewerCount: Number(raw.reviewerCount) || 0,
+    containsPHI: Boolean(raw.containsPHI),
+    embeddingB64: raw.embeddingB64,
+  };
 }
 
 function loadStore(): StoreFile {
@@ -72,10 +117,19 @@ function loadStore(): StoreFile {
   const path = storePath();
   try {
     if (existsSync(path)) {
-      const parsed = JSON.parse(readFileSync(path, "utf8")) as StoreFile;
-      if (parsed?.version === 1 && Array.isArray(parsed.corrections)) {
-        g.__endoCorrectionStore = parsed;
-        return parsed;
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+        version?: number;
+        corrections?: Record<string, unknown>[];
+      };
+      if (Array.isArray(parsed.corrections)) {
+        const store: StoreFile = {
+          version: 2,
+          corrections: parsed.corrections
+            .map(migrateRow)
+            .filter((x): x is StoredCorrection => x !== null),
+        };
+        g.__endoCorrectionStore = store;
+        return store;
       }
     }
   } catch {
@@ -110,7 +164,33 @@ function toRow(c: StoredCorrection): CorrectionRow {
     misunderstood: c.misunderstood,
     embedDocument: c.embedDocument,
     embeddingDim: c.embeddingDim,
+    approvalStatus: c.approvalStatus,
+    taxonomyVersion: c.taxonomyVersion,
+    reviewerCount: c.reviewerCount,
+    containsPHI: c.containsPHI,
   };
+}
+
+/** Eligible for prompt retrieval — governance gate before similarity. */
+export function isEligibleForPromptRetrieval(row: CorrectionRow): boolean {
+  return (
+    row.approvalStatus === "approved" &&
+    row.taxonomyVersion === TAXONOMY_VERSION &&
+    row.reviewerCount >= 2 &&
+    row.containsPHI === false
+  );
+}
+
+/**
+ * Unreviewed / single-reviewer corrections become evaluation cases —
+ * never prompt context. Similarity alone cannot establish clinical validity.
+ */
+export function isEvaluationOnlyCase(row: CorrectionRow): boolean {
+  return (
+    row.approvalStatus === "evaluation_only" ||
+    row.approvalStatus === "pending_review" ||
+    !isEligibleForPromptRetrieval(row)
+  );
 }
 
 export function insertCorrection(row: CorrectionInsert): void {
@@ -128,8 +208,16 @@ export function insertCorrection(row: CorrectionInsert): void {
     misunderstood: row.misunderstood,
     embedDocument: row.embedDocument,
     embeddingDim: row.queryVector.length,
+    approvalStatus: row.approvalStatus ?? "pending_review",
+    taxonomyVersion: row.taxonomyVersion ?? TAXONOMY_VERSION,
+    reviewerCount: row.reviewerCount ?? 0,
+    containsPHI: row.containsPHI ?? false,
     embeddingB64: Buffer.from(blob).toString("base64"),
   };
+  // Unreviewed → evaluation_only when not explicitly approved
+  if (stored.approvalStatus === "pending_review" && stored.reviewerCount < 2) {
+    stored.approvalStatus = "evaluation_only";
+  }
   store.corrections.push(stored);
   persistStore(store);
 }
@@ -137,14 +225,31 @@ export function insertCorrection(row: CorrectionInsert): void {
 export function searchSimilarCorrections(
   queryVector: number[],
   topK: number,
+  filter: CorrectionRetrieveFilter = {
+    approvalStatus: "approved",
+    taxonomyVersion: TAXONOMY_VERSION,
+    minReviewerCount: 2,
+    allowPhi: false,
+  },
 ): Array<CorrectionRow & { score: number }> {
   const q = new Float32Array(queryVector);
   const store = loadStore();
+  const approval = filter.approvalStatus ?? "approved";
+  const taxonomy = filter.taxonomyVersion ?? TAXONOMY_VERSION;
+  const minReviewers = filter.minReviewerCount ?? 2;
+  const allowPhi = filter.allowPhi ?? false;
+
   return store.corrections
     .map((r) => {
+      const row = toRow(r);
+      // Hard governance gate BEFORE similarity ranking
+      if (row.approvalStatus !== approval) return null;
+      if (row.taxonomyVersion !== taxonomy) return null;
+      if (row.reviewerCount < minReviewers) return null;
+      if (!allowPhi && row.containsPHI) return null;
       const v = blobToFloat32(Buffer.from(r.embeddingB64, "base64"));
       if (v.length !== q.length) return null;
-      return { ...toRow(r), score: cosineSimilarity(q, v) };
+      return { ...row, score: cosineSimilarity(q, v) };
     })
     .filter((x): x is CorrectionRow & { score: number } => x !== null)
     .sort((a, b) => b.score - a.score)
@@ -157,4 +262,11 @@ export function listRecentCorrections(limit: number): CorrectionRow[] {
     .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, limit)
     .map(toRow);
+}
+
+/** List evaluation-only cases (not for prompt context). */
+export function listEvaluationCases(limit: number): CorrectionRow[] {
+  return listRecentCorrections(Math.max(limit * 3, 50))
+    .filter(isEvaluationOnlyCase)
+    .slice(0, limit);
 }

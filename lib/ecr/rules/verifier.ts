@@ -58,9 +58,9 @@ export function verifyEcrAnalysis(args: {
   ) {
     issues.push({
       code: "masks_unreviewed",
-      severity: "warn",
+      severity: "abstain",
       message:
-        "Critical masks not clinician-reviewed — Phase-1 requires review before clinical-facing use.",
+        "Critical masks not clinician-reviewed/corrected — abstain from Patel code and option ranking until review.",
     });
   }
 

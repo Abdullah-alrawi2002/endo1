@@ -4,6 +4,8 @@ import { createLlmClient } from "@/lib/llm";
 import { loadCurriculum } from "@/lib/prompts/load-curriculum";
 import {
   STAGE_TITLES,
+  diagnosticCriticSystemPrompt,
+  mimicConflictSystemPrompt,
   stage1SystemPrompt,
   stage2SystemPrompt,
   stage3SystemPrompt,
@@ -79,7 +81,7 @@ function formatRagBlock(
       ? `\nWhat was misunderstood: ${h.misunderstood.trim()}`
       : "";
     return [
-      `--- Correction ${i + 1} (similarity ${h.score.toFixed(3)}) ---`,
+      `--- Correction ${i + 1} (similarity ${h.score.toFixed(3)}; dual-reviewed approved) ---`,
       "Case:",
       h.caseCanonical,
       "",
@@ -93,8 +95,9 @@ function formatRagBlock(
   });
   return [
     "## Clinician corrections from similar cases",
-    "These are institutional teaching examples. Weight them as soft priors.",
-    "If any correction conflicts with immutable prerequisites (controls, abscess signs, imaging origin), the curriculum and raw inputs override the correction—state that conflict explicitly.",
+    "These are dual-reviewed, approved, PHI-free teaching examples at the current taxonomy.",
+    "Unreviewed corrections are evaluation cases only and are never retrieved here.",
+    "Weight them as soft priors. Curriculum and raw inputs override corrections on conflicts.",
     "",
     ...parts,
   ].join("\n");
@@ -136,8 +139,10 @@ function emitEvidence(gate: ReturnType<typeof runClinicalGate>, extra?: Partial<
 }
 
 /**
- * Agentic multi-stage diagnosis pipeline (plan Stages 1–4) with Stage 0 gate
- * and a deterministic post-synthesis verifier.
+ * Agentic multi-stage diagnosis pipeline:
+ * Stage 0 gate → RAG (approved-only) → Stage 1 interpretation →
+ * independent pulpal / apical / mimic → synthesis → diagnostic critic →
+ * deterministic verifier.
  */
 export async function* runDiagnosisPipeline(
   clinicalCaseInput: ClinicalCase,
@@ -166,7 +171,13 @@ export async function* runDiagnosisPipeline(
     if (!options.skipRag && isCorrectionRagEnabled()) {
       try {
         const qVec = await llm.embedText(caseBlock);
-        const hits = searchSimilarCorrections(qVec, ragTopK());
+        // Governance: approved + current taxonomy + ≥2 reviewers + no PHI
+        const hits = searchSimilarCorrections(qVec, ragTopK(), {
+          approvalStatus: "approved",
+          taxonomyVersion: TAXONOMY_VERSION,
+          minReviewerCount: 2,
+          allowPhi: false,
+        });
         ragMatchCount = hits.length;
         ragContext = formatRagBlock(hits);
         yield {
@@ -203,46 +214,59 @@ export async function* runDiagnosisPipeline(
       content: stage1Content,
     };
 
-    yield { type: "status", message: "Stage 2 — pulpal candidate…" };
-    const stage2Content = await llm.chatComplete([
-      { role: "system", content: stage2SystemPrompt() },
-      {
-        role: "user",
-        content: `Case JSON:\n${caseJson}\n\nSummary:\n${caseBlock}\n\nStage 1 analysis:\n${stage1Content}`,
-      },
+    // Independent specialists after interpretation — no pulpal→apical anchoring.
+    yield {
+      type: "status",
+      message: "Running independent pulpal, apical, and mimic/conflict agents…",
+    };
+    const sharedEvidenceUser = [
+      `Case JSON:\n${caseJson}`,
+      `Summary:\n${caseBlock}`,
+      `Stage 1 analysis:\n${stage1Content}`,
+      "Do NOT use Patel ECR codes or CBCT canal proximity (p) as pulpal evidence.",
+      "CBCT cannot establish vitality.",
+    ].join("\n\n");
+
+    const [stage2Content, stage3Content, mimicContent] = await Promise.all([
+      llm.chatComplete([
+        { role: "system", content: stage2SystemPrompt() },
+        { role: "user", content: sharedEvidenceUser },
+      ]),
+      llm.chatComplete([
+        { role: "system", content: stage3SystemPrompt() },
+        { role: "user", content: sharedEvidenceUser },
+      ]),
+      llm.chatComplete([
+        { role: "system", content: mimicConflictSystemPrompt() },
+        { role: "user", content: sharedEvidenceUser },
+      ]),
     ]);
+
     yield {
       type: "stage",
       stage: 2,
       title: STAGE_TITLES[2],
       content: stage2Content,
     };
-
-    yield { type: "status", message: "Stage 3 — apical candidate…" };
-    const stage3Content = await llm.chatComplete([
-      { role: "system", content: stage3SystemPrompt() },
-      {
-        role: "user",
-        content: `Case JSON:\n${caseJson}\n\nSummary:\n${caseBlock}\n\nStage 1:\n${stage1Content}\n\nStage 2:\n${stage2Content}`,
-      },
-    ]);
     yield {
       type: "stage",
       stage: 3,
       title: STAGE_TITLES[3],
-      content: stage3Content,
+      content: `${stage3Content}\n\n--- Mimic/conflict (independent) ---\n${mimicContent}`,
     };
 
-    yield { type: "status", message: "Stage 4 — synthesis…" };
+    yield { type: "status", message: "Stage 4 — synthesis (coherence check)…" };
     const stage4System = stage4SystemPrompt(curriculum, ragContext);
     const stage4User = [
       `Case JSON:\n${caseJson}`,
       `Summary:\n${caseBlock}`,
       `Stage 1:\n${stage1Content}`,
-      `Stage 2:\n${stage2Content}`,
-      `Stage 3:\n${stage3Content}`,
+      `Independent pulpal agent:\n${stage2Content}`,
+      `Independent apical agent:\n${stage3Content}`,
+      `Independent mimic/conflict agent:\n${mimicContent}`,
       "Gate warnings:",
       ...gate.warnings,
+      "Synthesize only after checking coherence among independent agents.",
       "Produce the JSON object now.",
     ].join("\n\n");
 
@@ -278,7 +302,6 @@ export async function* runDiagnosisPipeline(
     }
 
     let proposal = attempt.data;
-    // Merge gate evidence into the proposal for a complete table.
     proposal = finalDiagnosisSchema.parse({
       ...proposal,
       taxonomyVersion: TAXONOMY_VERSION,
@@ -312,6 +335,53 @@ export async function* runDiagnosisPipeline(
       content: JSON.stringify(proposal, null, 2),
     };
 
+    // Diagnostic critic between synthesis and deterministic verifier
+    yield { type: "status", message: "Diagnostic critic reviewing synthesis…" };
+    const criticRaw = await llm.chatComplete([
+      { role: "system", content: diagnosticCriticSystemPrompt() },
+      {
+        role: "user",
+        content: [
+          `Stage 1:\n${stage1Content}`,
+          `Pulpal:\n${stage2Content}`,
+          `Apical:\n${stage3Content}`,
+          `Mimic/conflict:\n${mimicContent}`,
+          `Synthesizer JSON:\n${JSON.stringify(proposal, null, 2)}`,
+        ].join("\n\n"),
+      },
+    ]);
+    const criticContradicted = /^Critic:\s*contradicted/im.test(criticRaw.trim());
+    if (criticContradicted) {
+      const rejected = abstentionResult({
+        ...gate,
+        status: "conflicting_data",
+        conflicts: [
+          ...gate.conflicts,
+          `Diagnostic critic contradicted synthesis: ${criticRaw.slice(0, 400)}`,
+        ],
+      });
+      const final: FinalDiagnosis = {
+        ...rejected,
+        evidenceFor: proposal.evidenceFor,
+        evidenceAgainst: [
+          ...proposal.evidenceAgainst,
+          {
+            claim: "Diagnostic critic contradicted synthesizer coherence",
+            source: "verifier",
+          },
+        ],
+        biologicalJustification: proposal.biologicalJustification,
+        warnings: [
+          ...(proposal.warnings ?? []),
+          "Diagnostic critic rejected proposal before deterministic verifier.",
+        ],
+      };
+      yield { type: "status", message: "Diagnostic critic contradicted synthesis." };
+      yield emitEvidence(gate, final);
+      yield { type: "final", result: final };
+      return;
+    }
+
     const verification = verifyDiagnosisProposal(clinicalCase, gate, {
       status: proposal.status,
       pulpalDiagnosis: proposal.pulpalDiagnosis,
@@ -343,7 +413,6 @@ export async function* runDiagnosisPipeline(
       return;
     }
 
-    // If model abstained while gate said diagnosable, honor abstention.
     if (proposal.status !== "diagnosable") {
       const final: FinalDiagnosis = {
         ...proposal,
@@ -364,6 +433,10 @@ export async function* runDiagnosisPipeline(
         proposal.finalDiagnosisLine ??
         `${proposal.pulpalDiagnosis} with ${proposal.apicalDiagnosis}`,
       clinicianConfirmationRequired: true,
+      warnings: [
+        ...(proposal.warnings ?? []),
+        "Diagnostic critic: passed (or abstained without contradiction).",
+      ],
     };
 
     yield { type: "status", message: "Diagnosis complete — clinician confirmation required." };

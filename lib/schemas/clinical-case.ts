@@ -293,7 +293,12 @@ export const correctionIngestSchema = z.object({
   errorTypes: z.array(z.enum(ERROR_TYPES)).min(1).max(10),
   specialistIdentity: z.string().min(2).max(200),
   taxonomyVersion: z.literal(TAXONOMY_VERSION),
-  approvalStatus: z.enum(["pending", "approved", "withdrawn"]).default("pending"),
+  /** Pending/evaluation_only never enter prompt RAG until dual-reviewed approved. */
+  approvalStatus: z
+    .enum(["pending_review", "approved", "rejected", "evaluation_only", "pending", "withdrawn"])
+    .default("pending_review"),
+  reviewerCount: z.number().int().min(0).max(20).default(1),
+  containsPHI: z.boolean().default(false),
   misunderstoodSummary: z.string().max(4000).optional(),
 });
 

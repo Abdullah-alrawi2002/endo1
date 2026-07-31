@@ -60,6 +60,15 @@ export async function POST(req: Request) {
       b.misunderstoodSummary,
     );
     const queryVector = await embedCorrectionDocument(embedDocument);
+    const approvalRaw = b.approvalStatus;
+    const approvalStatus =
+      approvalRaw === "approved"
+        ? "approved"
+        : approvalRaw === "rejected" || approvalRaw === "withdrawn"
+          ? "rejected"
+          : approvalRaw === "evaluation_only"
+            ? "evaluation_only"
+            : "pending_review";
     insertCorrection({
       id: randomUUID(),
       createdAt: Date.now(),
@@ -72,11 +81,19 @@ export async function POST(req: Request) {
       misunderstood: b.misunderstoodSummary?.trim() || null,
       embedDocument,
       queryVector,
+      approvalStatus,
+      taxonomyVersion: b.taxonomyVersion,
+      reviewerCount: b.reviewerCount,
+      containsPHI: b.containsPHI,
     });
     return Response.json({
       ok: true,
-      approvalStatus: b.approvalStatus,
-      note: "Correction saved for similar future cases. Do not include PHI.",
+      approvalStatus:
+        approvalStatus === "approved" && b.reviewerCount >= 2 && !b.containsPHI
+          ? "approved"
+          : "evaluation_only",
+      note:
+        "Unreviewed or single-reviewer corrections are evaluation cases only — not prompt context. Dual-reviewed approved PHI-free rows at current taxonomy may be retrieved.",
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed to save correction";
