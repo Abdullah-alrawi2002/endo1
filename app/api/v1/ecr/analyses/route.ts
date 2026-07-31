@@ -8,14 +8,17 @@ import {
 } from "@/lib/ecr/store";
 import { runEcrPipeline } from "@/lib/ecr/pipeline";
 import { buildIntegratedPlan } from "@/lib/integration/build-integrated-plan";
-import {
-  ecrAnalysisCreateSchema,
-} from "@/lib/ecr/schemas";
+import { ecrAnalysisCreateSchema } from "@/lib/ecr/schemas";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-/** POST /api/v1/ecr/analyses — create analysis from reviewed measurements. */
+/**
+ * POST /api/v1/ecr/analyses
+ * CBCT-derived measurements → Patel classification → provisional treatment plan.
+ * Always runs the evidence-first agent network + treatment synthesizer unless
+ * useAgentNetwork is explicitly false (deterministic-only research arm).
+ */
 export async function POST(req: Request) {
   let body: unknown;
   try {
@@ -36,7 +39,7 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         error:
-          "measurements required — demo/fabricated measurements are disabled. Provide clinician-reviewed CBCT measurements.",
+          "measurements required. Enter clinician-reviewed CBCT measurements (CEJ/crest extents, circumference, lesion–canal relation). Automatic ECR segmentation is not yet enabled.",
       },
       { status: 400 },
     );
@@ -46,95 +49,146 @@ export async function POST(req: Request) {
   job = appendAudit(job, {
     actor: "api",
     action: "analysis_started",
-    detail: parsed.data.seriesLabel ?? parsed.data.dicomReference ?? "measurement_input",
+    detail:
+      parsed.data.seriesLabel ??
+      parsed.data.dicomReference ??
+      "cbct_measurement_input",
   });
 
   try {
     const measurements = parsed.data.measurements;
     measurements.toothLabel = parsed.data.toothLabel;
 
-    const useAgentNetwork =
-      process.env.ENDO_ECR_AGENT_NETWORK === "1" ||
-      process.env.ENDO_ECR_AGENT_NETWORK === "true" ||
-      (body as { useAgentNetwork?: boolean }).useAgentNetwork === true;
+    const bodyObj = body as { useAgentNetwork?: boolean };
+    const useAgentNetwork = bodyObj.useAgentNetwork !== false;
 
-    if (useAgentNetwork) {
-      const integrated = await buildIntegratedPlan({
-        caseId: job.analysisId,
-        measurements,
-        ecrAnalysisId: job.analysisId,
-      });
-      // Also persist deterministic Phase-1 result for compatibility
-      const result = runEcrPipeline(measurements, job.analysisId);
-      result.warnings = [
-        ...result.warnings,
-        ...integrated.patelNetwork.warnings,
-        `Agent-network code: ${integrated.patelNetwork.code ?? "null"} (decisionSource=${integrated.patelNetwork.decisionSource})`,
-        `Deterministic reference (hidden from agents): ${integrated.deterministicReferenceCode ?? "null"}`,
-        `Plan status: ${integrated.provisionalPlan.planStatus}`,
-      ];
-      // Prefer agent-network code when complete; keep deterministic components for audit
-      if (
-        integrated.patelNetwork.code &&
-        integrated.patelNetwork.classificationStatus === "complete"
-      ) {
-        result.patel = {
-          ...result.patel,
-          code: integrated.patelNetwork.code,
-          manualReviewRequired:
-            result.patel.manualReviewRequired ||
-            integrated.patelNetwork.requiresSpecialistReview,
-        };
-      } else if (integrated.patelNetwork.requiresSpecialistReview) {
-        result.patel = {
-          ...result.patel,
-          status: "abstained",
-          code: null,
-          manualReviewRequired: true,
-        };
-      }
+    // Deterministic geometry always runs (research reference + schema-compatible result).
+    let result = runEcrPipeline(measurements, job.analysisId);
 
+    if (!useAgentNetwork) {
       const completed = setEcrResult(
         job,
         result,
         result.patel.code ? "completed" : "abstained",
       );
-      saveEcrJob(
-        appendAudit(completed, {
-          actor: "system",
-          action: "agent_network_completed",
-          detail: integrated.evidenceHash,
-        }),
-      );
-
       return NextResponse.json({
         analysisId: completed.analysisId,
         jobStatus: completed.jobStatus,
         result: completed.result,
-        unifiedCase: integrated.unified,
-        patelNetwork: {
-          ...integrated.patelNetwork,
-          // Strip hidden reference from client-facing agent payload? Keep for research UI audit panel.
-        },
-        provisionalPlan: integrated.provisionalPlan,
         notice:
-          "CBCT-derived ECR classification and treatment-planning options — not a definitive treatment plan. Agents received evidence only; deterministic classifier used as invisible verifier.",
+          "Deterministic Patel + conditional ESE options only (agent network disabled). Not a definitive treatment plan.",
       });
     }
 
-    const result = runEcrPipeline(measurements, job.analysisId);
+    const integrated = await buildIntegratedPlan({
+      caseId: job.analysisId,
+      measurements,
+      ecrAnalysisId: job.analysisId,
+    });
+
+    result = {
+      ...result,
+      warnings: [
+        ...result.warnings,
+        ...integrated.patelNetwork.warnings,
+        `Decision source: ${integrated.patelNetwork.decisionSource}`,
+        `Plan status: ${integrated.provisionalPlan.planStatus}`,
+      ],
+    };
+
+    if (
+      integrated.patelNetwork.code &&
+      integrated.patelNetwork.classificationStatus === "complete" &&
+      !integrated.patelNetwork.requiresSpecialistReview
+    ) {
+      result = {
+        ...result,
+        patel: {
+          ...result.patel,
+          code: integrated.patelNetwork.code,
+          status: "complete",
+          manualReviewRequired:
+            result.patel.manualReviewRequired ||
+            integrated.patelNetwork.requiresSpecialistReview,
+        },
+      };
+    } else if (
+      integrated.patelNetwork.requiresSpecialistReview ||
+      integrated.patelNetwork.classificationStatus === "needs_specialist_review" ||
+      integrated.patelNetwork.classificationStatus === "abstained"
+    ) {
+      result = {
+        ...result,
+        patel: {
+          ...result.patel,
+          status:
+            integrated.patelNetwork.classificationStatus === "abstained"
+              ? "abstained"
+              : result.patel.status === "complete"
+                ? "incomplete"
+                : result.patel.status,
+          code:
+            integrated.patelNetwork.classificationStatus === "abstained"
+              ? null
+              : integrated.patelNetwork.code ?? result.patel.code,
+          manualReviewRequired: true,
+        },
+      };
+    }
+
+    // Prefer agent-network multilabel options when plan produced candidates
+    if (integrated.provisionalPlan.candidates.length) {
+      const fromPlan = integrated.provisionalPlan.candidates.map((c) => ({
+        option: c.strategy,
+        status: c.status,
+        supportingRuleIds: c.sourceRuleIds.length
+          ? c.sourceRuleIds
+          : ["TREATMENT-AGENT-3.0"],
+        supportingCbctFeatures: c.activateIf,
+        limitingCbctFeatures: c.rejectIf,
+        requiresClinicalConfirmation: c.requiredClinicalConfirmations,
+        evidenceVersion: c.evidenceVersion,
+      }));
+      result = {
+        ...result,
+        managementSupport: {
+          ...result.managementSupport,
+          options: fromPlan.length ? fromPlan : result.managementSupport.options,
+        },
+      };
+    }
+
     const completed = setEcrResult(
       job,
       result,
-      result.patel.code ? "completed" : "abstained",
+      result.patel.code || integrated.provisionalPlan.candidates.length
+        ? "completed"
+        : "abstained",
+      {
+        patelNetwork: integrated.patelNetwork,
+        provisionalPlan: integrated.provisionalPlan,
+        evidenceHash: integrated.evidenceHash,
+      },
+    );
+
+    saveEcrJob(
+      appendAudit(completed, {
+        actor: "system",
+        action: "treatment_plan_generated",
+        detail: `${integrated.provisionalPlan.planStatus}; primary=${integrated.provisionalPlan.primaryStrategy ?? "none"}`,
+      }),
     );
 
     return NextResponse.json({
       analysisId: completed.analysisId,
       jobStatus: completed.jobStatus,
       result: completed.result,
+      patelNetwork: integrated.patelNetwork,
+      provisionalPlan: integrated.provisionalPlan,
+      unifiedCase: integrated.unified,
+      evidenceHash: integrated.evidenceHash,
       notice:
-        "CBCT-derived ECR classification and treatment-planning options — not a definitive treatment plan. Phase-1 accepts clinician-reviewed measurements; full DICOM segmentation is roadmap Phase 2–3.",
+        "CBCT-derived Patel classification and provisional treatment-planning options for external cervical resorption — not a definitive treatment plan. Specialist confirmation of the entire volume is required.",
     });
   } catch (e) {
     job.jobStatus = "failed";
@@ -156,6 +210,13 @@ export async function GET() {
     jobStatus: j.jobStatus,
     updatedAt: j.updatedAt,
     patelCode: j.result?.patel.code ?? null,
+    planStatus:
+      j.provisionalPlan &&
+      typeof j.provisionalPlan === "object" &&
+      j.provisionalPlan !== null &&
+      "planStatus" in j.provisionalPlan
+        ? (j.provisionalPlan as { planStatus: string }).planStatus
+        : null,
     toothLabel: j.result?.target.toothLabel ?? null,
   }));
   return NextResponse.json({ analyses: jobs });

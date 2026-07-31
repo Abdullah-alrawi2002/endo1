@@ -34,6 +34,10 @@ export function buildEvidencePackage(input: {
   ];
 
   const planning = m.planning ?? {};
+  const circUnc =
+    input.circumferenceUncertaintyDegrees ??
+    m.circumferenceUncertaintyDegrees ??
+    null;
 
   const hashable = {
     packageVersion: ECR_EVIDENCE_PACKAGE_VERSION,
@@ -58,8 +62,7 @@ export function buildEvidencePackage(input: {
       rootLengthCejToApexMm: m.rootLengthCejToApexMm,
       localCrestDistanceMmFromCEJ: m.localCrestDistanceMmFromCEJ,
       maximumCircumferenceDegrees: m.maximumCircumferenceDegrees,
-      circumferenceUncertaintyDegrees:
-        input.circumferenceUncertaintyDegrees ?? null,
+      circumferenceUncertaintyDegrees: circUnc,
       minimumLesionCanalSeparationMm: m.minimumLesionCanalSeparationMm,
       separationUncertaintyLowerBoundMm:
         m.separationUncertaintyLowerBoundMm ?? null,

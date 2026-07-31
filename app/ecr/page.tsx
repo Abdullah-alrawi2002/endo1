@@ -9,13 +9,20 @@ import {
   STRUCTURAL_CONTINUITY_VALUES,
   type EcrResult,
 } from "@/lib/ecr/schemas";
+import type {
+  PatelNetworkResult,
+  ProvisionalPlan,
+} from "@/lib/ecr/agents/schemas";
 
 type FormState = {
   toothLabel: string;
+  seriesLabel: string;
+  dicomReference: string;
   mostApicalExtentMmFromCEJ: string;
   rootLengthCejToApexMm: string;
   localCrestDistanceMmFromCEJ: string;
   maximumCircumferenceDegrees: string;
+  circumferenceUncertaintyDegrees: string;
   minimumLesionCanalSeparationMm: string;
   lesionCanalContactOrIntersection: boolean;
   continuousDentineBarrierVisible: boolean;
@@ -25,14 +32,18 @@ type FormState = {
   internalAccessProxy: (typeof ACCESS_PROXY_VALUES)[number];
   structuralContinuity: (typeof STRUCTURAL_CONTINUITY_VALUES)[number];
   qualityStatus: "pass" | "conditional" | "fail";
+  portalSurface: string;
 };
 
 const initial: FormState = {
   toothLabel: "11",
+  seriesLabel: "CBCT volume — ECR workup",
+  dicomReference: "",
   mostApicalExtentMmFromCEJ: "4.8",
   rootLengthCejToApexMm: "16",
   localCrestDistanceMmFromCEJ: "2.0",
   maximumCircumferenceDegrees: "142",
+  circumferenceUncertaintyDegrees: "",
   minimumLesionCanalSeparationMm: "0",
   lesionCanalContactOrIntersection: true,
   continuousDentineBarrierVisible: false,
@@ -42,13 +53,20 @@ const initial: FormState = {
   internalAccessProxy: "possible",
   structuralContinuity: "reduced",
   qualityStatus: "pass",
+  portalSurface: "buccal",
 };
+
+function strategyLabel(s: string): string {
+  return s.replace(/_/g, " ");
+}
 
 export default function EcrPage() {
   const [form, setForm] = useState<FormState>(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<EcrResult | null>(null);
+  const [plan, setPlan] = useState<ProvisionalPlan | null>(null);
+  const [network, setNetwork] = useState<PatelNetworkResult | null>(null);
   const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [reviewerId, setReviewerId] = useState("");
   const [reviewNotes, setReviewNotes] = useState("");
@@ -71,6 +89,9 @@ export default function EcrPage() {
         rootLengthCejToApexMm: num(form.rootLengthCejToApexMm),
         localCrestDistanceMmFromCEJ: num(form.localCrestDistanceMmFromCEJ),
         maximumCircumferenceDegrees: num(form.maximumCircumferenceDegrees),
+        circumferenceUncertaintyDegrees: num(
+          form.circumferenceUncertaintyDegrees,
+        ),
         minimumLesionCanalSeparationMm: num(form.minimumLesionCanalSeparationMm),
         separationUncertaintyLowerBoundMm: num(form.minimumLesionCanalSeparationMm),
         lesionCanalContactOrIntersection: form.lesionCanalContactOrIntersection,
@@ -90,11 +111,12 @@ export default function EcrPage() {
             canalBoundaryNearLesion: true,
             lesionMargins: true,
           },
-          artifactWarnings: [],
-          qualityGateFailures: [],
+          artifactWarnings: [] as string[],
+          qualityGateFailures: [] as string[],
         },
+        portalSurface: form.portalSurface || undefined,
         planning: {
-          portalSurface: "buccal",
+          portalSurface: form.portalSurface || null,
           portalAreaMm2: 3.1,
           portalSupracrestal: "present" as const,
           lesionVolumeMm3: 18.4,
@@ -117,14 +139,18 @@ export default function EcrPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           toothLabel: form.toothLabel,
-          seriesLabel: "phase1-measurement-session",
+          seriesLabel: form.seriesLabel || undefined,
+          dicomReference: form.dicomReference || undefined,
           measurements,
+          useAgentNetwork: true,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       setAnalysisId(data.analysisId);
       setResult(data.result as EcrResult);
+      setPlan((data.provisionalPlan as ProvisionalPlan) ?? null);
+      setNetwork((data.patelNetwork as PatelNetworkResult) ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Analysis failed");
     } finally {
@@ -154,34 +180,73 @@ export default function EcrPage() {
     }
   }
 
-  const optionCards = useMemo(() => result?.managementSupport.options ?? [], [result]);
+  const candidates = useMemo(() => plan?.candidates ?? [], [plan]);
+  const alternatives = useMemo(() => plan?.alternativeStrategies ?? [], [plan]);
 
   return (
-    <div className="shell">
+    <div className="shell shell--wide">
       <header>
         <p className="section-label">
-          <Link href="/">← AAE clinical agent</Link>
+          <Link href="/">← AAE clinical diagnosis</Link>
         </p>
-        <h1 className="page-title">ECR CBCT analysis</h1>
+        <h1 className="page-title">ECR CBCT treatment planning</h1>
         <p className="page-lede">
-          Patel three-dimensional external cervical resorption classification from
-          CBCT-derived measurements. Research/educational decision support —
-          specialist confirmation required. Not a definitive treatment plan.
+          Classify external cervical resorption on CBCT with the Patel system,
+          then generate a provisional, multilabel treatment plan for that tooth.
+          Measurements must be reviewed from the 3D volume. Automatic ECR
+          segmentation is not yet enabled — this path is measurement-driven and
+          specialist-confirmed. Not a definitive treatment plan.
         </p>
+        <ol className="workflow-steps">
+          <li>
+            <strong>1. CBCT evidence</strong> — tooth, quality, differential,
+            reviewed measurements
+          </li>
+          <li>
+            <strong>2. Patel classification</strong> — height × circumference ×
+            canal (d/p)
+          </li>
+          <li>
+            <strong>3. Treatment plan</strong> — overlapping conditional options
+            + clinician review
+          </li>
+        </ol>
       </header>
 
       <section className="input-category">
-        <h3>Target & scan quality</h3>
+        <h3>1 · CBCT case & quality</h3>
+        <p className="body-text body-text--tight">
+          Enter findings after reviewing the CBCT volume for the target tooth.
+          Unreviewed masks and non-ECR differentials abstain from classification
+          and planning.
+        </p>
         <div className="input-grid">
           <label className="input-field">
-            <span>Tooth label (imaging)</span>
+            <span>Tooth (imaging label)</span>
             <input
               value={form.toothLabel}
               onChange={(e) => setForm({ ...form, toothLabel: e.target.value })}
             />
           </label>
           <label className="input-field">
-            <span>Quality status</span>
+            <span>Series / study label</span>
+            <input
+              value={form.seriesLabel}
+              onChange={(e) => setForm({ ...form, seriesLabel: e.target.value })}
+            />
+          </label>
+          <label className="input-field">
+            <span>DICOM / PACS reference (optional)</span>
+            <input
+              placeholder="Study UID or Orthanc ID"
+              value={form.dicomReference}
+              onChange={(e) =>
+                setForm({ ...form, dicomReference: e.target.value })
+              }
+            />
+          </label>
+          <label className="input-field">
+            <span>Scan quality</span>
             <select
               value={form.qualityStatus}
               onChange={(e) =>
@@ -216,7 +281,7 @@ export default function EcrPage() {
             </select>
           </label>
           <label className="input-field">
-            <span>Mask review</span>
+            <span>Mask / measurement review</span>
             <select
               value={form.maskReviewStatus}
               onChange={(e) =>
@@ -229,14 +294,18 @@ export default function EcrPage() {
             >
               <option value="clinician_reviewed">clinician_reviewed</option>
               <option value="clinician_corrected">clinician_corrected</option>
-              <option value="proposed">proposed</option>
+              <option value="proposed">proposed (will abstain)</option>
             </select>
           </label>
         </div>
       </section>
 
       <section className="input-category">
-        <h3>Patel measurements (tooth-aligned)</h3>
+        <h3>1 · Patel measurements from CBCT</h3>
+        <p className="body-text body-text--tight">
+          Tooth-aligned: most apical lesion extent vs CEJ and crest, root
+          length, maximum circumferential angle, lesion–canal relation.
+        </p>
         <div className="input-grid">
           <label className="input-field">
             <span>Most apical extent from CEJ (mm)</span>
@@ -248,7 +317,7 @@ export default function EcrPage() {
             />
           </label>
           <label className="input-field">
-            <span>Root length CEJ→apex (mm)</span>
+            <span>Root length CEJ → apex (mm)</span>
             <input
               value={form.rootLengthCejToApexMm}
               onChange={(e) =>
@@ -281,6 +350,19 @@ export default function EcrPage() {
             />
           </label>
           <label className="input-field">
+            <span>Circumference uncertainty ± (°)</span>
+            <input
+              placeholder="optional"
+              value={form.circumferenceUncertaintyDegrees}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  circumferenceUncertaintyDegrees: e.target.value,
+                })
+              }
+            />
+          </label>
+          <label className="input-field">
             <span>Min lesion–canal separation (mm)</span>
             <input
               value={form.minimumLesionCanalSeparationMm}
@@ -289,6 +371,15 @@ export default function EcrPage() {
                   ...form,
                   minimumLesionCanalSeparationMm: e.target.value,
                 })
+              }
+            />
+          </label>
+          <label className="input-field">
+            <span>Portal surface</span>
+            <input
+              value={form.portalSurface}
+              onChange={(e) =>
+                setForm({ ...form, portalSurface: e.target.value })
               }
             />
           </label>
@@ -305,7 +396,7 @@ export default function EcrPage() {
                 })
               }
             />{" "}
-            Lesion contacts/intersects canal
+            Lesion contacts / intersects canal (→ Patel p)
           </span>
         </label>
         <label className="input-field">
@@ -320,16 +411,16 @@ export default function EcrPage() {
                 })
               }
             />{" "}
-            Continuous dentine barrier visible
+            Continuous dentine barrier visible (→ Patel d)
           </span>
         </label>
       </section>
 
       <section className="input-category">
-        <h3>Treatment-relevant imaging proxies</h3>
+        <h3>1 · Access & structure (planning proxies)</h3>
         <div className="input-grid">
           <label className="input-field">
-            <span>External access proxy</span>
+            <span>External access (imaging)</span>
             <select
               value={form.externalAccessProxy}
               onChange={(e) =>
@@ -348,7 +439,7 @@ export default function EcrPage() {
             </select>
           </label>
           <label className="input-field">
-            <span>Internal access proxy</span>
+            <span>Internal access (imaging)</span>
             <select
               value={form.internalAccessProxy}
               onChange={(e) =>
@@ -390,7 +481,9 @@ export default function EcrPage() {
 
       <div className="toolbar">
         <button type="button" className="btn" onClick={runAnalysis} disabled={busy}>
-          {busy ? "Calculating…" : "Calculate Patel + options"}
+          {busy
+            ? "Classifying & planning…"
+            : "Classify Patel + generate treatment plan"}
         </button>
         {analysisId ? (
           <a
@@ -399,7 +492,7 @@ export default function EcrPage() {
             target="_blank"
             rel="noreferrer"
           >
-            Open report
+            Open plan report
           </a>
         ) : null}
       </div>
@@ -409,8 +502,19 @@ export default function EcrPage() {
       {result ? (
         <>
           <section className="output-block output-block--final">
-            <h3 className="output-title">Patel components</h3>
+            <h3 className="output-title">2 · Patel classification</h3>
             <p className="body-text">{result.outputLabel}</p>
+            <div className="patel-code-hero">
+              <span className="patel-code-hero__label">Patel code</span>
+              <span className="patel-code-hero__value">
+                {result.patel.code ?? "—"}
+              </span>
+              {network?.requiresSpecialistReview ? (
+                <span className="patel-code-hero__flag">
+                  Needs specialist review
+                </span>
+              ) : null}
+            </div>
             <div className="diagnosis-row">
               <div>
                 <div className="diagnosis-label">Height</div>
@@ -422,9 +526,9 @@ export default function EcrPage() {
               <div>
                 <div className="diagnosis-label">Circumference</div>
                 <div className="diagnosis-value">
-                  {result.patel.circumference.value ?? "—"}{" "}
+                  {result.patel.circumference.value ?? "—"}
                   {result.patel.circumference.maximumAngleDegrees != null
-                    ? `(${result.patel.circumference.maximumAngleDegrees}°)`
+                    ? ` (${result.patel.circumference.maximumAngleDegrees}°)`
                     : ""}
                 </div>
               </div>
@@ -433,43 +537,177 @@ export default function EcrPage() {
                 <div className="diagnosis-value">
                   {result.patel.canalProximity.value ?? "—"}
                 </div>
+                <p className="body-text body-text--tight">
+                  p = imaging canal involvement, not pulp necrosis
+                </p>
               </div>
               <div>
-                <div className="diagnosis-label">Code</div>
-                <div className="diagnosis-value">{result.patel.code ?? "—"}</div>
+                <div className="diagnosis-label">Network</div>
+                <div className="diagnosis-value">
+                  {network?.classificationStatus ?? result.patel.status}
+                </div>
+                <p className="body-text body-text--tight">
+                  {network?.decisionSource ?? "deterministic"}
+                </p>
               </div>
             </div>
             <p className="body-text body-text--tight">
-              Status: {result.patel.status} · Differential:{" "}
-              {result.ecrAssessment.status} · Quality: {result.scan.qualityStatus}
+              Differential: {result.ecrAssessment.status} · Quality:{" "}
+              {result.scan.qualityStatus}
+              {analysisId ? ` · ID ${analysisId.slice(0, 8)}…` : ""}
             </p>
             {result.warnings.length ? (
               <ul className="warnings">
-                {result.warnings.map((w) => (
+                {result.warnings.slice(0, 12).map((w) => (
                   <li key={w}>{w}</li>
                 ))}
               </ul>
             ) : null}
           </section>
 
-          <section className="output-block">
-            <h3 className="output-title">Conditional management options</h3>
-            <p className="scan-disclaimer">
-              Multilabel imaging options only. No single “recommended treatment”
-              button. Ruleset {result.managementSupport.rulesetVersion}.
-            </p>
-            {optionCards.length === 0 ? (
-              <p className="body-text">No options ranked (abstained or incomplete).</p>
+          <section className="output-block output-block--plan">
+            <h3 className="output-title">3 · Provisional treatment plan</h3>
+            {plan ? (
+              <>
+                <p className="scan-disclaimer">
+                  Status: <strong>{plan.planStatus}</strong> · Safety:{" "}
+                  {plan.safetyStatus} · Critic: {plan.criticStatus}. Overlapping
+                  alternatives are preserved (e.g. 2Bp may support both external
+                  repair with RCT consideration and internal repair with RCT).
+                  CBCT alone cannot finalize vitality, restorability, or patient
+                  preference.
+                </p>
+                <div className="plan-primary">
+                  <div className="diagnosis-label">Primary imaging strategy</div>
+                  <div className="diagnosis-value">
+                    {plan.primaryStrategy
+                      ? strategyLabel(plan.primaryStrategy)
+                      : "None — specialist review"}
+                  </div>
+                </div>
+
+                {candidates.length ? (
+                  <div className="evidence-grid">
+                    {candidates.map((c) => (
+                      <article key={c.strategy} className="plan-candidate">
+                        <div className="diagnosis-label">{c.status}</div>
+                        <div className="diagnosis-value">
+                          {strategyLabel(c.strategy)}
+                        </div>
+                        <p className="body-text body-text--tight">
+                          {c.treatmentObjective}
+                        </p>
+                        {c.proceduralSequence.length ? (
+                          <>
+                            <div className="diagnosis-label">Sequence</div>
+                            <ol className="plan-sequence">
+                              {c.proceduralSequence.map((step) => (
+                                <li key={step}>{step}</li>
+                              ))}
+                            </ol>
+                          </>
+                        ) : null}
+                        <div className="diagnosis-label">
+                          Required clinical confirmations
+                        </div>
+                        <ul className="warnings">
+                          {c.requiredClinicalConfirmations.map((x) => (
+                            <li key={x}>{x}</li>
+                          ))}
+                        </ul>
+                        {c.activateIf.length ? (
+                          <>
+                            <div className="diagnosis-label">Activate if</div>
+                            <ul className="warnings">
+                              {c.activateIf.map((x) => (
+                                <li key={x}>{x}</li>
+                              ))}
+                            </ul>
+                          </>
+                        ) : null}
+                        {c.rejectIf.length ? (
+                          <>
+                            <div className="diagnosis-label">Reject / stop if</div>
+                            <ul className="warnings">
+                              {c.rejectIf.map((x) => (
+                                <li key={x}>{x}</li>
+                              ))}
+                            </ul>
+                          </>
+                        ) : null}
+                        <p className="body-text body-text--tight">
+                          Rules: {c.sourceRuleIds.join(", ") || "—"}
+                        </p>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="body-text">
+                    No treatment candidates generated — check classification
+                    status and specialist review flags.
+                  </p>
+                )}
+
+                {alternatives.length > 0 &&
+                alternatives.some(
+                  (a) => a.strategy !== plan.primaryStrategy,
+                ) ? (
+                  <>
+                    <div className="diagnosis-label">
+                      Alternative strategies retained
+                    </div>
+                    <ul className="warnings">
+                      {alternatives.map((a) => (
+                        <li key={a.strategy}>
+                          [{a.status}] {strategyLabel(a.strategy)}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : null}
+
+                {plan.decisionCheckpoints.length ? (
+                  <>
+                    <div className="diagnosis-label">Decision checkpoints</div>
+                    <ul className="warnings">
+                      {plan.decisionCheckpoints.map((c) => (
+                        <li key={c}>{c}</li>
+                      ))}
+                    </ul>
+                  </>
+                ) : null}
+
+                {plan.unsupportedVariables.length ? (
+                  <>
+                    <div className="diagnosis-label">
+                      Cannot determine from CBCT alone
+                    </div>
+                    <ul className="warnings">
+                      {plan.unsupportedVariables.map((c) => (
+                        <li key={c}>{c}</li>
+                      ))}
+                    </ul>
+                  </>
+                ) : null}
+              </>
             ) : (
+              <p className="body-text">
+                Provisional plan not returned. Showing ESE option cards from the
+                deterministic engine below.
+              </p>
+            )}
+          </section>
+
+          {!plan && result.managementSupport.options.length ? (
+            <section className="output-block">
+              <h3 className="output-title">Conditional management options</h3>
               <div className="evidence-grid">
-                {optionCards.map((o) => (
+                {result.managementSupport.options.map((o) => (
                   <article key={o.option} className="output-block">
                     <div className="diagnosis-label">{o.status}</div>
-                    <div className="diagnosis-value">{o.option}</div>
-                    <p className="body-text body-text--tight">
-                      Rules: {o.supportingRuleIds.join(", ")}
-                    </p>
-                    <div className="diagnosis-label">Requires clinical confirmation</div>
+                    <div className="diagnosis-value">
+                      {strategyLabel(o.option)}
+                    </div>
                     <ul className="warnings">
                       {o.requiresClinicalConfirmation.map((c) => (
                         <li key={c}>{c}</li>
@@ -478,17 +716,15 @@ export default function EcrPage() {
                   </article>
                 ))}
               </div>
-            )}
-            <div className="diagnosis-label">Cannot determine from CBCT</div>
-            <ul className="warnings">
-              {result.managementSupport.cannotDetermineFromCbct.map((c) => (
-                <li key={c}>{c}</li>
-              ))}
-            </ul>
-          </section>
+            </section>
+          ) : null}
 
           <section className="output-block">
-            <h3 className="output-title">Specialist review</h3>
+            <h3 className="output-title">Clinician review</h3>
+            <p className="body-text body-text--tight">
+              Confirm or modify after interpreting the entire CBCT volume and
+              clinical findings (sensibility, probing, restorability).
+            </p>
             <label className="input-field">
               <span>Reviewer ID</span>
               <input

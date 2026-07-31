@@ -19,6 +19,9 @@ export async function GET(_req: Request, ctx: Ctx) {
     updatedAt: job.updatedAt,
     error: job.error ?? null,
     result: job.result,
+    patelNetwork: job.patelNetwork ?? null,
+    provisionalPlan: job.provisionalPlan ?? null,
+    evidenceHash: job.evidenceHash ?? null,
     audit: job.audit,
   });
 }

@@ -281,6 +281,8 @@ export const ecrMeasurementInputSchema = z.object({
   localCrestDistanceMmFromCEJ: z.number().min(0).max(20).nullable(),
   /** Maximum circumferential union angle in degrees. */
   maximumCircumferenceDegrees: z.number().min(0).max(360).nullable(),
+  /** Optional angular uncertainty for borderline circumference. */
+  circumferenceUncertaintyDegrees: z.number().min(0).max(90).nullable().optional(),
   /** Minimum lesion-to-canal surface distance (mm). Null if unresolved. */
   minimumLesionCanalSeparationMm: z.number().min(0).max(10).nullable(),
   /** Lower uncertainty bound for separation; used for d/p borderline. */
@@ -326,6 +328,11 @@ export const ecrJobSchema = z.object({
   updatedAt: z.number(),
   error: z.string().nullable().optional(),
   result: ecrResultSchema.nullable(),
+  /** Agent-network Patel classification (evidence-first); optional for Phase-1 jobs. */
+  patelNetwork: z.unknown().nullable().optional(),
+  /** Provisional overlapping treatment plan from treatment-agent network. */
+  provisionalPlan: z.unknown().nullable().optional(),
+  evidenceHash: z.string().nullable().optional(),
   audit: z
     .array(
       z.object({

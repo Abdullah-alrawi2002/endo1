@@ -208,8 +208,8 @@ export default function Home() {
         </p>
         <p className="page-lede">
           Separate product:{" "}
-          <a href="/ecr">ECR CBCT Patel classification</a> (CBCT-only
-          external cervical resorption analysis).
+          <a href="/ecr">ECR CBCT treatment planning</a> (Patel classification
+          → provisional options for external cervical resorption).
         </p>
         {features ? (
           <p className="page-lede">

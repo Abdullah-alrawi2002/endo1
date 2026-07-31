@@ -98,11 +98,23 @@ export function listRecentEcrJobs(limit = 30): EcrJob[] {
     .slice(0, limit);
 }
 
-export function setEcrResult(job: EcrJob, result: EcrResult, status: EcrJob["jobStatus"]): EcrJob {
+export function setEcrResult(
+  job: EcrJob,
+  result: EcrResult,
+  status: EcrJob["jobStatus"],
+  extras?: {
+    patelNetwork?: unknown | null;
+    provisionalPlan?: unknown | null;
+    evidenceHash?: string | null;
+  },
+): EcrJob {
   const next: EcrJob = {
     ...job,
     jobStatus: status,
     result,
+    patelNetwork: extras?.patelNetwork ?? job.patelNetwork ?? null,
+    provisionalPlan: extras?.provisionalPlan ?? job.provisionalPlan ?? null,
+    evidenceHash: extras?.evidenceHash ?? job.evidenceHash ?? null,
     updatedAt: Date.now(),
     audit: [
       ...job.audit,
