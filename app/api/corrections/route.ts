@@ -42,10 +42,7 @@ export async function POST(req: Request) {
 
   try {
     const b = parsed.data;
-    const caseCanonical = serializeCaseCanonical({
-      ...b.case,
-      ctSupport: undefined,
-    });
+    const caseCanonical = serializeCaseCanonical(b.case);
     const embedDocument = buildCorrectionEmbedDocument(
       caseCanonical,
       b.agentStatus,

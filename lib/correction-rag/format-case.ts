@@ -4,6 +4,7 @@ function label(v: string): string {
   return v.replaceAll("_", " ");
 }
 
+/** Canonical text used for embedding / RAG similarity. */
 export function serializeCaseCanonical(c: ClinicalCase): string {
   const lines: string[] = [
     `Taxonomy: ${c.taxonomyVersion}`,
@@ -23,12 +24,8 @@ export function serializeCaseCanonical(c: ClinicalCase): string {
     "=== Sensibility & mechanical tests ===",
     `Cold: ${label(c.clinical.cold)}; linger_s=${c.clinical.coldLingerSeconds ?? "n/a"}; vs control=${c.clinical.coldComparedToControl}; validity=${c.clinical.coldValidity}; repeated=${c.clinical.coldRepeated}`,
     `EPT: ${c.clinical.ept}; vs control=${c.clinical.eptComparedToControl}; validity=${c.clinical.eptValidity}; repeated=${c.clinical.eptRepeated}`,
-    `Percussion severity: ${c.clinical.percussion}`,
-    `Palpation severity: ${c.clinical.palpation}`,
-    `Biting severity: ${c.clinical.biting}`,
-    `Tooth Slooth (crack/bite): ${c.clinical.toothSloothBiting}`,
-    `Transillumination (structural): ${c.clinical.transillumination}`,
-    `Fluorescent light: ${c.clinical.fluorescentLight}`,
+    `Percussion: ${c.clinical.percussion}; palpation: ${c.clinical.palpation}; biting: ${c.clinical.biting}`,
+    `Tooth Slooth: ${c.clinical.toothSloothBiting}; transillumination: ${c.clinical.transillumination}; fluorescent light: ${c.clinical.fluorescentLight}`,
     "",
     "=== Periodontal ===",
     `Isolated deep pocket: ${c.periodontal.isolatedDeepPocket}; mobility: ${c.periodontal.mobility}; occlusion trauma: ${c.periodontal.occlusionTrauma}`,
@@ -46,24 +43,6 @@ export function serializeCaseCanonical(c: ClinicalCase): string {
     "=== Confounders ===",
     `Recent anesthesia: ${c.confounders.recentAnesthesia}; calcification: ${c.confounders.calcificationSuspected}; poor isolation: ${c.confounders.poorIsolation}; generalized low responsiveness: ${c.confounders.generalizedLowResponsiveness}; recent trauma: ${c.confounders.recentTrauma}`,
   ];
-
-  if (c.ctSupport) {
-    const ct = c.ctSupport;
-    lines.push(
-      "",
-      "=== CT SUPPORT (research / non-diagnostic) ===",
-      `analysisId=${ct.analysisId}; qualityGatePassed=${ct.qualityGatePassed}; clinicianReviewed=${ct.clinicianReviewed}; clinicianSeedProvided=${ct.clinicianSeedProvided}`,
-      `candidateLowAttenuationRegion=${ct.candidateLowAttenuationRegion}; location=${ct.candidateLocation ?? "n/a"}; volumeMm3=${ct.candidateVolumeMm3 ?? "n/a"}; relativeDrop%=${ct.relativeAttenuationDropPercent ?? "n/a"}`,
-      `canalLengthEstimateMm=${ct.canalLengthEstimateMm ?? "n/a"} (anatomical estimate only; not clinical WL)`,
-      `vertucciScreen=${ct.vertucciScreen ?? "n/a"}`,
-      ...(ct.artifactWarnings.length
-        ? [`Artifact warnings: ${ct.artifactWarnings.join("; ")}`]
-        : []),
-      ...(ct.qualityGateFailures.length
-        ? [`Quality gate failures: ${ct.qualityGateFailures.join("; ")}`]
-        : []),
-    );
-  }
 
   if (c.additionalNotes?.trim()) {
     lines.push("", `Additional notes: ${c.additionalNotes.trim()}`);

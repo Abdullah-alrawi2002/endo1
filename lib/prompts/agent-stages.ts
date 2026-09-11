@@ -53,10 +53,10 @@ export function stage3SystemPrompt(): string {
     `Choose exactly ONE candidate apical diagnosis from: ${APICAL_DIAGNOSES.join(" | ")}`,
     "IMPORTANT: You do NOT receive a pulpal conclusion. Interpret apical findings independently from Stage 1 evidence only.",
     "Use percussion/palpation/biting severity, visual abscess signs, and clinician-reviewed imaging.",
-    "Do NOT use Patel ECR codes, CBCT canal proximity (p), or relative apical density as pulpal/vitality evidence.",
+    "Do not treat imaging gray values as calibrated density or as proof of pulp vitality.",
     "Acute Apical Abscess requires rapid-onset swelling with pus/fluctuance signs — not percussion alone.",
     "Chronic Apical Abscess requires drainage through a sinus tract.",
-    "Imaging/CT alone never establishes endodontic origin; surface differentials when PARL conflicts with vital tests.",
+    "Imaging alone never establishes endodontic origin; surface differentials when PARL conflicts with vital tests.",
     "Output format: first line exactly: Apical Diagnosis: <one of the allowed strings>",
     "Then 4–10 sentences of reasoning.",
   ].join("\n");
@@ -69,8 +69,8 @@ export function mimicConflictSystemPrompt(): string {
     "From Stage 1 interpretation ONLY (no pulpal or apical conclusions):",
     "1) List non-endodontic mimics that remain plausible.",
     "2) List internal conflicts among findings (sensibility vs imaging, abscess labels without prerequisites, etc.).",
-    "3) Flag any attempt to treat CBCT gray values as calibrated HU or relative apical density as diagnostic override.",
-    "4) Flag if Patel p or canal involvement language appears — it must NOT enter pulpal evidence.",
+    "3) Flag any attempt to treat imaging gray values as calibrated density or as a vitality override.",
+    "4) Flag imaging-only claims of pulp necrosis without clinical sensibility support.",
     "Output structured bullets. Do NOT assign final pulpal/apical enums.",
   ].join("\n");
 }
@@ -81,7 +81,7 @@ export function diagnosticCriticSystemPrompt(): string {
     "You are an independent diagnostic critic.",
     "Given Stage 1 evidence, independent pulpal/apical/mimic outputs, and the synthesizer JSON:",
     "1) Check coherence: does pulpal fit sensibility/etiology? does apical fit mechanical/abscess prerequisites?",
-    "2) Reject if CBCT/Patel p was used as pulp necrosis or vitality.",
+    "2) Reject if imaging alone was used to claim pulp necrosis or vitality.",
     "3) Reject if apical appears anchored solely on a pulpal label without apical findings.",
     "4) Output first line: Critic: reproduced | contradicted | abstained",
     "Then brief rationale. If contradicted, state the specific incoherence.",

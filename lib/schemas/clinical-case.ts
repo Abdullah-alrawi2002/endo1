@@ -190,33 +190,6 @@ export const confoundersSchema = z.object({
   recentTrauma: triadFindingSchema,
 });
 
-/**
- * Non-diagnostic CBCT research support payload.
- * Never establishes endodontic origin or forces an apical enum.
- */
-export const ctSupportSchema = z.object({
-  analysisId: z.string().min(8).max(120),
-  status: z.enum(["completed", "partial", "failed"]),
-  targetToothUniversal: z.number().int().min(1).max(32),
-  clinicianSeedProvided: z.boolean(),
-  qualityGatePassed: z.boolean(),
-  candidateLowAttenuationRegion: z.boolean().nullable(),
-  candidateLocation: z.string().max(300).nullable(),
-  candidateVolumeMm3: z.number().nullable(),
-  relativeAttenuationDropPercent: z.number().nullable(),
-  artifactWarnings: z.array(z.string().max(300)).max(30),
-  qualityGateFailures: z.array(z.string().max(300)).max(30),
-  morphologyNotes: z.string().max(4000).nullable(),
-  vertucciScreen: z.string().max(120).nullable(),
-  canalLengthEstimateMm: z.number().nullable(),
-  canalLengthEstimateNote: z.string().max(400).nullable(),
-  clinicianReviewed: z.boolean(),
-  reviewRequired: z.literal(true),
-  provider: z.string().max(120),
-});
-
-export type CTSupport = z.infer<typeof ctSupportSchema>;
-
 export const clinicalCaseSchema = z.object({
   taxonomyVersion: z.literal(TAXONOMY_VERSION).default(TAXONOMY_VERSION),
   tooth: toothIdentitySchema,
@@ -227,10 +200,6 @@ export const clinicalCaseSchema = z.object({
   periodontal: periodontalSchema,
   imaging: imagingFindingsSchema,
   confounders: confoundersSchema,
-  /** Opaque server-side CT analysis id when the research module is enabled. */
-  ctAnalysisId: z.string().min(8).max(120).optional(),
-  /** Only populated server-side after retrieving a stored CT analysis. */
-  ctSupport: ctSupportSchema.optional(),
   additionalNotes: z.string().max(4000).optional(),
 });
 
@@ -246,7 +215,6 @@ export const evidenceItemSchema = z.object({
     "imaging",
     "periodontal",
     "confounder",
-    "ct_support",
     "curriculum",
     "verifier",
   ]),

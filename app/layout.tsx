@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Endodontic Diagnostic & ECR CBCT Planning",
+  title: "Endodontic Diagnostic Agent",
   description:
-    "AAE clinical diagnosis and CBCT Patel ECR treatment planning. Educational use only.",
+    "AAE pulpal and apical diagnosis from structured clinical findings. Educational use only.",
 };
 
 export default function RootLayout({

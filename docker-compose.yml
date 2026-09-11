@@ -1,4 +1,3 @@
-# Local all-in-one (same image shape as production)
 services:
   app:
     build:
@@ -10,32 +9,9 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ENDO_MODEL: ${ENDO_MODEL:-gpt-4o}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
-      ENABLE_CT_MODULE: "true"
       ENABLE_CORRECTION_RAG: "true"
-      CT_SIDECAR_URL: http://127.0.0.1:8000
-      CT_VISION_MODEL: ${CT_VISION_MODEL:-gpt-4o}
-      CT_ASSUME_CALIBRATED_HU: ${CT_ASSUME_CALIBRATED_HU:-false}
+      CORRECTIONS_JSON_PATH: /data/corrections.json
     volumes:
-      - endo-data:/data
-      - ./ct-models:/models
-    restart: unless-stopped
-
-  # Optional: run CT-only for local `npm run dev` workflows
-  ct-sidecar:
-    profiles: ["ct-only"]
-    build:
-      context: ./ct-sidecar
-    ports:
-      - "8000:8000"
-    environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      CT_VISION_MODEL: ${CT_VISION_MODEL:-gpt-4o}
-      CT_ASSUME_CALIBRATED_HU: ${CT_ASSUME_CALIBRATED_HU:-false}
-      CT_MAX_CONCURRENT_ANALYSES: "1"
-      CT_ANALYSIS_STORE_PATH: /data/ct-analyses
-      CT_ALLOWED_ORIGINS: "*"
-    volumes:
-      - ./ct-models:/models
       - endo-data:/data
     restart: unless-stopped
 

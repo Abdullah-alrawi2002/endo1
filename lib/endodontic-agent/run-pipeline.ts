@@ -22,8 +22,7 @@ import {
   runClinicalGate,
   verifyDiagnosisProposal,
 } from "@/lib/endodontic-agent/clinical-verifier";
-import { isCorrectionRagEnabled, isCtModuleEnabled } from "@/lib/features";
-import { loadCtSupport } from "@/lib/ct-analysis/store";
+import { isCorrectionRagEnabled } from "@/lib/features";
 
 export type DiagnosisPipelineOptions = {
   skipRag?: boolean;
@@ -113,20 +112,6 @@ function parseModelJson(raw: string): unknown {
   return JSON.parse(s);
 }
 
-function attachCtSupport(clinicalCase: ClinicalCase): Promise<ClinicalCase> {
-  if (!isCtModuleEnabled() || !clinicalCase.ctAnalysisId) {
-    return Promise.resolve({ ...clinicalCase, ctSupport: undefined });
-  }
-  return loadCtSupport(clinicalCase.ctAnalysisId).then((stored) => {
-    if (!stored) {
-      throw new Error(
-        "ctAnalysisId was not found. Re-run CT analysis or clear the CT field.",
-      );
-    }
-    return { ...clinicalCase, ctSupport: stored };
-  });
-}
-
 function emitEvidence(gate: ReturnType<typeof runClinicalGate>, extra?: Partial<FinalDiagnosis>): Extract<StreamEvent, { type: "evidence" }> {
   return {
     type: "evidence",
@@ -149,7 +134,7 @@ export async function* runDiagnosisPipeline(
   options: DiagnosisPipelineOptions = {},
 ): AsyncGenerator<StreamEvent> {
   try {
-    const clinicalCase = await attachCtSupport(clinicalCaseInput);
+    const clinicalCase = clinicalCaseInput;
     yield { type: "status", message: "Running Stage 0 scope/validity gate…" };
 
     const gate = runClinicalGate(clinicalCase);
@@ -223,8 +208,7 @@ export async function* runDiagnosisPipeline(
       `Case JSON:\n${caseJson}`,
       `Summary:\n${caseBlock}`,
       `Stage 1 analysis:\n${stage1Content}`,
-      "Do NOT use Patel ECR codes or CBCT canal proximity (p) as pulpal evidence.",
-      "CBCT cannot establish vitality.",
+      "Imaging alone cannot establish pulp vitality.",
     ].join("\n\n");
 
     const [stage2Content, stage3Content, mimicContent] = await Promise.all([

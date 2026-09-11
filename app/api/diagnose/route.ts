@@ -1,6 +1,5 @@
 import { clinicalCaseSchema } from "@/lib/schemas/clinical-case";
 import { runDiagnosisPipeline } from "@/lib/endodontic-agent/run-pipeline";
-import { isCtModuleEnabled } from "@/lib/features";
 
 export const runtime = "nodejs";
 /** Multi-stage LLM calls need a longer budget on hosted platforms. */
@@ -22,16 +21,6 @@ export async function POST(req: Request) {
     );
   }
 
-  // Strip any client-supplied ctSupport; only opaque ctAnalysisId is accepted.
-  const clinicalCase = {
-    ...parsed.data,
-    ctSupport: undefined,
-    ctAnalysisId:
-      isCtModuleEnabled() && parsed.data.ctAnalysisId
-        ? parsed.data.ctAnalysisId
-        : undefined,
-  };
-
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -39,7 +28,7 @@ export async function POST(req: Request) {
         controller.enqueue(encoder.encode(`${JSON.stringify(obj)}\n`));
       };
       try {
-        for await (const ev of runDiagnosisPipeline(clinicalCase)) {
+        for await (const ev of runDiagnosisPipeline(parsed.data)) {
           send(ev);
         }
       } catch (e) {
@@ -56,7 +45,7 @@ export async function POST(req: Request) {
   return new Response(stream, {
     headers: {
       "Content-Type": "application/x-ndjson; charset=utf-8",
-      "Cache-Control": "no-store",
+      "Cache-Control": "no-cache, no-transform",
     },
   });
 }

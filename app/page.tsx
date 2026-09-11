@@ -1,7 +1,6 @@
 "use client";
 
 import { ClinicalCaseForm } from "@/components/ClinicalCaseForm";
-import { CTAnalysisUpload } from "@/components/CTAnalysisUpload";
 import { useEffect, useMemo, useState } from "react";
 import {
   APICAL_DIAGNOSES,
@@ -30,11 +29,9 @@ type StreamEvent =
   | { type: "error"; message: string };
 
 type FeatureFlags = {
-  ctModuleEnabled: boolean;
   correctionRagEnabled: boolean;
   taxonomyVersion: string;
   mvpMode: string;
-  ctUploadUrl: string | null;
 };
 
 export default function Home() {
@@ -68,11 +65,9 @@ export default function Home() {
       .then((data: FeatureFlags) => setFeatures(data))
       .catch(() =>
         setFeatures({
-          ctModuleEnabled: false,
           correctionRagEnabled: true,
           taxonomyVersion: TAXONOMY_VERSION,
           mvpMode: "clinical_agentic",
-          ctUploadUrl: null,
         }),
       );
   }, []);
@@ -103,7 +98,6 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...clinicalCase,
-          ctSupport: undefined,
         }),
       });
       if (!res.ok || !res.body) {
@@ -147,7 +141,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          case: { ...clinicalCase, ctSupport: undefined },
+          case: clinicalCase,
           agentStatus: finalResult.result.status,
           agentPulpal: finalResult.result.pulpalDiagnosis,
           agentApical: finalResult.result.apicalDiagnosis,
@@ -206,15 +200,9 @@ export default function Home() {
           abstain · clinician confirmation required. Educational decision
           support only — not a medical device.
         </p>
-        <p className="page-lede">
-          Separate product:{" "}
-          <a href="/ecr">ECR CBCT treatment planning</a> (Patel classification
-          → provisional options for external cervical resorption).
-        </p>
         {features ? (
           <p className="page-lede">
-            Correction RAG: {features.correctionRagEnabled ? "on" : "off"} · CT
-            module: {features.ctModuleEnabled ? "on" : "off"}
+            Correction RAG: {features.correctionRagEnabled ? "on" : "off"}
           </p>
         ) : null}
       </header>
@@ -222,20 +210,6 @@ export default function Home() {
       <p className="section-label">Case</p>
       <ClinicalCaseForm value={clinicalCase} onChange={setClinicalCase} />
 
-      {features?.ctModuleEnabled ? (
-        <CTAnalysisUpload
-          analysisId={clinicalCase.ctAnalysisId}
-          ctUploadUrl={features.ctUploadUrl}
-          onChange={(ctAnalysisId) =>
-            setClinicalCase((current) => ({ ...current, ctAnalysisId }))
-          }
-        />
-      ) : (
-        <p className="scan-disclaimer">
-          CBCT support is off (`ENABLE_CT_MODULE=false`). Use the all-in-one
-          Docker host (see SHARE.md) to run web + CT together on one link.
-        </p>
-      )}
 
       <div className="toolbar">
         <button

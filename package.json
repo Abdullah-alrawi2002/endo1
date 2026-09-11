@@ -10,12 +10,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:ecr": "tsx scripts/test-ecr.mts",
     "batch": "tsx --env-file=.env scripts/batch-diagnose.mts",
     "app:up": "docker compose up --build",
-    "app:down": "docker compose down",
-    "ct:up": "docker compose --profile ct-only up --build ct-sidecar",
-    "ct:down": "docker compose --profile ct-only down"
+    "app:down": "docker compose down"
   },
   "dependencies": {
     "next": "16.2.6",

@@ -164,15 +164,6 @@ export function runClinicalGate(c: ClinicalCase): GateResult {
     );
   }
 
-  if (c.ctSupport?.candidateLowAttenuationRegion && !c.ctSupport.clinicianReviewed) {
-    warnings.push(
-      "CT support shows a candidate low-attenuation region that has not been clinician-reviewed; it cannot establish endodontic origin.",
-    );
-  }
-  if (c.ctSupport && !c.ctSupport.qualityGatePassed) {
-    warnings.push("CT quality gate failed; ignore quantitative CT support features.");
-  }
-
   // Evidence snippets for the UI table (deterministic).
   if (c.clinical.cold !== "not_performed") {
     evidenceFor.push({
@@ -342,24 +333,6 @@ export function verifyDiagnosisProposal(
             "Pulp Necrosis with active false-negative confounders requires repeated valid testing and supporting findings; abstain or gather more data.",
         };
       }
-    }
-  }
-
-  // CT must never be the sole basis for apical disease.
-  if (
-    proposal.apicalDiagnosis !== "Normal Apical Tissues" &&
-    c.imaging.periapicalRadiolucency !== "present" &&
-    c.clinical.percussion === "none" &&
-    c.clinical.palpation === "none" &&
-    c.visual.swelling !== "present" &&
-    c.visual.sinusTract !== "present"
-  ) {
-    if (c.ctSupport?.candidateLowAttenuationRegion) {
-      return {
-        ok: false,
-        reason:
-          "CT candidate low-attenuation alone cannot establish apical disease or endodontic origin. Require clinical apical findings or clinician-confirmed radiographic disease.",
-      };
     }
   }
 
