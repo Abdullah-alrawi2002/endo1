@@ -41,8 +41,19 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# local correction RAG database (each developer gets their own)
+# local correction RAG memory (each developer / host keeps their own)
 /data/*.db
 /data/*.db-journal
 /data/*.db-wal
 /data/*.db-shm
+/data/*.json
+/data/ct-analyses/
+/data/ecr-analyses/
+
+# Python CT sidecar caches and locally mounted model weights
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+/ct-models/
+/ct-sidecar/.venv/

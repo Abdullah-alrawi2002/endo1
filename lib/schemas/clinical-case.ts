@@ -1,6 +1,13 @@
 import { z } from "zod";
 
-/** Exact strings used in UI, API, and LLM output contract */
+/** Frozen research taxonomy for this protocol. */
+export const TAXONOMY_VERSION = "AAE_2009" as const;
+
+/**
+ * AAE 2009 pulpal diagnoses used in the clinical MVP.
+ * Previously Treated / Previously Initiated Therapy are excluded at intake
+ * (out_of_scope) rather than diagnosed by this release.
+ */
 export const PULPAL_DIAGNOSES = [
   "Normal Pulp",
   "Reversible Pulpitis",
@@ -17,100 +24,325 @@ export const APICAL_DIAGNOSES = [
   "Chronic Apical Abscess",
 ] as const;
 
+export const DIAGNOSTIC_STATUSES = [
+  "diagnosable",
+  "insufficient_data",
+  "conflicting_data",
+  "out_of_scope",
+] as const;
+
 export type PulpalDiagnosis = (typeof PULPAL_DIAGNOSES)[number];
 export type ApicalDiagnosis = (typeof APICAL_DIAGNOSES)[number];
+export type DiagnosticStatus = (typeof DIAGNOSTIC_STATUSES)[number];
 
 export const pulpalDiagnosisSchema = z.enum(PULPAL_DIAGNOSES);
 export const apicalDiagnosisSchema = z.enum(APICAL_DIAGNOSES);
+export const diagnosticStatusSchema = z.enum(DIAGNOSTIC_STATUSES);
 
-export const visualFindingSchema = z.enum(["absent", "present", "unknown"]);
+/** Present/absent findings that may also be unknown. */
+export const triadFindingSchema = z.enum(["absent", "present", "unknown"]);
 
-export const optionalClinicalTestSchema = z.enum([
+/**
+ * Optional clinical tests — never silently coerce missing → absent.
+ * `invalid` / `unable_to_test` record that an attempt failed or was unreliable.
+ */
+export const optionalTestSchema = z.enum([
   "not_performed",
   "positive",
   "negative",
+  "unable_to_test",
+  "invalid",
 ]);
 
-export const imagingFindingSchema = z.enum(["present", "absent"]);
+export const imagingFindingSchema = z.enum([
+  "present",
+  "absent",
+  "unknown",
+  "not_assessed",
+]);
+
+export const severitySchema = z.enum([
+  "none",
+  "mild",
+  "moderate",
+  "severe",
+  "unknown",
+  "not_assessed",
+]);
+
+export const testValiditySchema = z.enum([
+  "valid",
+  "invalid",
+  "unable_to_test",
+  "not_performed",
+  "unknown",
+]);
+
+export const comparativeResponseSchema = z.enum([
+  "not_compared",
+  "similar_to_control",
+  "exaggerated_vs_control",
+  "reduced_vs_control",
+  "absent_vs_control_positive",
+  "unknown",
+]);
+
+export const toothIdentitySchema = z.object({
+  universal: z.number().int().min(1).max(32),
+  fdi: z.string().max(10).optional(),
+  dentition: z.enum(["permanent", "primary", "unknown"]),
+  apexMaturity: z.enum(["mature", "open", "unknown"]),
+});
+
+export const treatmentHistorySchema = z.enum([
+  "untreated",
+  "previously_initiated",
+  "previously_obturated",
+  "regenerative",
+  "unknown",
+]);
+
+export const symptomsSchema = z.object({
+  spontaneousPain: triadFindingSchema,
+  nocturnalPain: triadFindingSchema,
+  posturalPain: triadFindingSchema,
+  referredPain: triadFindingSchema,
+  thermalPainHistory: triadFindingSchema,
+  heatResponse: z.enum([
+    "not_performed",
+    "none",
+    "mild",
+    "severe",
+    "relieved_by_cold",
+    "unable_to_test",
+    "unknown",
+  ]),
+  coldRelievesPain: triadFindingSchema,
+});
 
 export const visualExamSchema = z.object({
-  sinusTract: visualFindingSchema,
-  swelling: visualFindingSchema,
-  decay: visualFindingSchema,
-  traumaSigns: visualFindingSchema,
+  sinusTract: triadFindingSchema,
+  sinusTractTraced: triadFindingSchema,
+  swelling: triadFindingSchema,
+  swellingSeverity: severitySchema,
+  fluctuance: triadFindingSchema,
+  pus: triadFindingSchema,
+  rapidOnsetSwelling: triadFindingSchema,
+  fever: triadFindingSchema,
+  lymphadenopathy: triadFindingSchema,
+  decay: triadFindingSchema,
+  deepCariesOrExposure: triadFindingSchema,
+  crownPresent: triadFindingSchema,
+  crackSuspected: triadFindingSchema,
+  traumaSigns: triadFindingSchema,
 });
 
 export const clinicalTestsSchema = z.object({
-  cold: z.enum(["normal", "exaggerated_non_lingering", "lingering", "negative"]),
+  cold: z.enum([
+    "normal",
+    "exaggerated_non_lingering",
+    "lingering",
+    "negative",
+    "unable_to_test",
+    "not_performed",
+  ]),
   coldLingerSeconds: z.number().positive().optional(),
-  percussion: z.enum(["positive", "negative"]),
-  palpation: z.enum(["positive", "negative"]),
-  ept: optionalClinicalTestSchema,
-  fluorescentLight: optionalClinicalTestSchema,
-  toothSloothBiting: optionalClinicalTestSchema,
+  coldComparedToControl: comparativeResponseSchema,
+  coldValidity: testValiditySchema,
+  coldRepeated: triadFindingSchema,
+  ept: optionalTestSchema,
+  eptComparedToControl: comparativeResponseSchema,
+  eptValidity: testValiditySchema,
+  eptRepeated: triadFindingSchema,
+  percussion: severitySchema,
+  palpation: severitySchema,
+  biting: severitySchema,
+  /** Structural / crack assessment — not a pulp sensibility test. */
+  toothSloothBiting: optionalTestSchema,
+  /** Structural assessment — not a pulp sensibility test. */
+  transillumination: optionalTestSchema,
+  fluorescentLight: optionalTestSchema,
+});
+
+export const periodontalSchema = z.object({
+  probingDepthsMm: z.string().max(200).optional(),
+  isolatedDeepPocket: triadFindingSchema,
+  mobility: z.enum(["0", "1", "2", "3", "unknown", "not_assessed"]),
+  occlusionTrauma: triadFindingSchema,
 });
 
 export const imagingFindingsSchema = z.object({
   periapicalRadiolucency: imagingFindingSchema,
   jShapedPeriapicalRadiolucency: imagingFindingSchema,
   widenedPeriodontalLigament: imagingFindingSchema,
+  laminaDuraLoss: imagingFindingSchema,
+  parlLocationNotes: z.string().max(500).optional(),
+  multiplePaViews: triadFindingSchema,
   internalResorption: imagingFindingSchema,
   externalResorption: imagingFindingSchema,
 });
 
+export const confoundersSchema = z.object({
+  recentAnesthesia: triadFindingSchema,
+  calcificationSuspected: triadFindingSchema,
+  poorIsolation: triadFindingSchema,
+  generalizedLowResponsiveness: triadFindingSchema,
+  recentTrauma: triadFindingSchema,
+});
+
 export const clinicalCaseSchema = z.object({
+  taxonomyVersion: z.literal(TAXONOMY_VERSION).default(TAXONOMY_VERSION),
+  tooth: toothIdentitySchema,
+  treatmentHistory: treatmentHistorySchema,
+  symptoms: symptomsSchema,
   visual: visualExamSchema,
   clinical: clinicalTestsSchema,
+  periodontal: periodontalSchema,
   imaging: imagingFindingsSchema,
+  confounders: confoundersSchema,
   additionalNotes: z.string().max(4000).optional(),
 });
 
 export type ClinicalCase = z.infer<typeof clinicalCaseSchema>;
 
+export const evidenceItemSchema = z.object({
+  claim: z.string().max(500),
+  source: z.enum([
+    "history",
+    "visual",
+    "sensibility",
+    "mechanical",
+    "imaging",
+    "periodontal",
+    "confounder",
+    "curriculum",
+    "verifier",
+  ]),
+});
+
 export const finalDiagnosisSchema = z.object({
-  pulpalDiagnosis: pulpalDiagnosisSchema,
-  apicalDiagnosis: apicalDiagnosisSchema,
-  finalDiagnosisLine: z.string(),
-  biologicalJustification: z.string(),
-  warnings: z.array(z.string()).optional(),
+  taxonomyVersion: z.literal(TAXONOMY_VERSION),
+  status: diagnosticStatusSchema,
+  pulpalDiagnosis: pulpalDiagnosisSchema.nullable(),
+  apicalDiagnosis: apicalDiagnosisSchema.nullable(),
+  finalDiagnosisLine: z.string().nullable(),
+  evidenceFor: z.array(evidenceItemSchema).max(40),
+  evidenceAgainst: z.array(evidenceItemSchema).max(40),
+  conflicts: z.array(z.string().max(500)).max(30),
+  missingRequiredData: z.array(z.string().max(300)).max(40),
+  recommendedNextTests: z.array(z.string().max(300)).max(30),
+  biologicalJustification: z.string().max(8000).nullable(),
+  warnings: z.array(z.string().max(500)).max(30).optional(),
+  clinicianConfirmationRequired: z.literal(true),
 });
 
 export type FinalDiagnosis = z.infer<typeof finalDiagnosisSchema>;
 
+export const ERROR_TYPES = [
+  "invalid_test_interpretation",
+  "mimic",
+  "missing_prerequisite",
+  "taxonomy_error",
+  "scope_error",
+  "other",
+] as const;
+
 export const correctionIngestSchema = z.object({
   case: clinicalCaseSchema,
-  agentPulpal: pulpalDiagnosisSchema,
-  agentApical: apicalDiagnosisSchema,
-  correctedPulpal: pulpalDiagnosisSchema,
-  correctedApical: apicalDiagnosisSchema,
+  agentStatus: diagnosticStatusSchema,
+  agentPulpal: pulpalDiagnosisSchema.nullable(),
+  agentApical: apicalDiagnosisSchema.nullable(),
+  adjudicatedReferenceDiagnosis: z.object({
+    status: diagnosticStatusSchema,
+    pulpal: pulpalDiagnosisSchema.nullable(),
+    apical: apicalDiagnosisSchema.nullable(),
+  }),
   correctionReasoning: z.string().min(10).max(8000),
+  errorTypes: z.array(z.enum(ERROR_TYPES)).min(1).max(10),
+  specialistIdentity: z.string().min(2).max(200),
+  taxonomyVersion: z.literal(TAXONOMY_VERSION),
+  /** Pending/evaluation_only never enter prompt RAG until dual-reviewed approved. */
+  approvalStatus: z
+    .enum(["pending_review", "approved", "rejected", "evaluation_only", "pending", "withdrawn"])
+    .default("pending_review"),
+  reviewerCount: z.number().int().min(0).max(20).default(1),
+  containsPHI: z.boolean().default(false),
   misunderstoodSummary: z.string().max(4000).optional(),
 });
 
 export type CorrectionIngest = z.infer<typeof correctionIngestSchema>;
 
 export const defaultClinicalCase: ClinicalCase = {
+  taxonomyVersion: TAXONOMY_VERSION,
+  tooth: {
+    universal: 30,
+    fdi: "46",
+    dentition: "permanent",
+    apexMaturity: "mature",
+  },
+  treatmentHistory: "untreated",
+  symptoms: {
+    spontaneousPain: "unknown",
+    nocturnalPain: "unknown",
+    posturalPain: "unknown",
+    referredPain: "unknown",
+    thermalPainHistory: "unknown",
+    heatResponse: "not_performed",
+    coldRelievesPain: "unknown",
+  },
   visual: {
     sinusTract: "absent",
+    sinusTractTraced: "unknown",
     swelling: "absent",
+    swellingSeverity: "none",
+    fluctuance: "absent",
+    pus: "absent",
+    rapidOnsetSwelling: "absent",
+    fever: "absent",
+    lymphadenopathy: "absent",
     decay: "unknown",
+    deepCariesOrExposure: "unknown",
+    crownPresent: "unknown",
+    crackSuspected: "unknown",
     traumaSigns: "absent",
   },
   clinical: {
     cold: "lingering",
     coldLingerSeconds: 30,
-    percussion: "positive",
-    palpation: "negative",
+    coldComparedToControl: "exaggerated_vs_control",
+    coldValidity: "valid",
+    coldRepeated: "present",
     ept: "positive",
-    fluorescentLight: "not_performed",
+    eptComparedToControl: "similar_to_control",
+    eptValidity: "valid",
+    eptRepeated: "present",
+    percussion: "moderate",
+    palpation: "none",
+    biting: "mild",
     toothSloothBiting: "not_performed",
+    transillumination: "not_performed",
+    fluorescentLight: "not_performed",
+  },
+  periodontal: {
+    isolatedDeepPocket: "unknown",
+    mobility: "unknown",
+    occlusionTrauma: "unknown",
   },
   imaging: {
     periapicalRadiolucency: "absent",
     jShapedPeriapicalRadiolucency: "absent",
-    widenedPeriodontalLigament: "absent",
-    internalResorption: "absent",
-    externalResorption: "absent",
+    widenedPeriodontalLigament: "unknown",
+    laminaDuraLoss: "unknown",
+    multiplePaViews: "unknown",
+    internalResorption: "not_assessed",
+    externalResorption: "not_assessed",
+  },
+  confounders: {
+    recentAnesthesia: "absent",
+    calcificationSuspected: "unknown",
+    poorIsolation: "unknown",
+    generalizedLowResponsiveness: "unknown",
+    recentTrauma: "absent",
   },
   additionalNotes: "",
 };

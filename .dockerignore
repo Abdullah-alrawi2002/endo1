@@ -1,0 +1,15 @@
+node_modules
+.next
+.git
+.gitignore
+*.md
+!lib/prompts/curriculum.md
+.env
+.env.*
+!.env.example
+data
+__pycache__
+*.pyc
+.venv
+*.db
+.DS_Store

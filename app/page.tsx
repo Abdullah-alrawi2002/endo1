@@ -1,45 +1,90 @@
 "use client";
 
 import { ClinicalCaseForm } from "@/components/ClinicalCaseForm";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   APICAL_DIAGNOSES,
   type ClinicalCase,
   defaultClinicalCase,
+  ERROR_TYPES,
   type FinalDiagnosis,
   PULPAL_DIAGNOSES,
+  TAXONOMY_VERSION,
+  type DiagnosticStatus,
 } from "@/lib/schemas/clinical-case";
 
 type StreamEvent =
+  | { type: "status"; message: string }
   | { type: "rag"; matchCount: number; contextBlock: string }
   | { type: "stage"; stage: 1 | 2 | 3 | 4; title: string; content: string }
+  | {
+      type: "evidence";
+      evidenceFor: FinalDiagnosis["evidenceFor"];
+      evidenceAgainst: FinalDiagnosis["evidenceAgainst"];
+      conflicts: string[];
+      missingRequiredData: string[];
+      recommendedNextTests: string[];
+    }
   | { type: "final"; result: FinalDiagnosis }
   | { type: "error"; message: string };
 
-const initialCase: ClinicalCase = defaultClinicalCase;
+type FeatureFlags = {
+  correctionRagEnabled: boolean;
+  taxonomyVersion: string;
+  mvpMode: string;
+};
 
 export default function Home() {
-  const [clinicalCase, setClinicalCase] = useState<ClinicalCase>(initialCase);
+  const [clinicalCase, setClinicalCase] =
+    useState<ClinicalCase>(defaultClinicalCase);
+  const [features, setFeatures] = useState<FeatureFlags | null>(null);
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showCorrection, setShowCorrection] = useState(false);
-  const [corrPulpal, setCorrPulpal] = useState<(typeof PULPAL_DIAGNOSES)[number]>(
-    PULPAL_DIAGNOSES[0],
-  );
-  const [corrApical, setCorrApical] = useState<(typeof APICAL_DIAGNOSES)[number]>(
-    APICAL_DIAGNOSES[0],
-  );
+  const [corrStatus, setCorrStatus] = useState<DiagnosticStatus>("diagnosable");
+  const [corrPulpal, setCorrPulpal] = useState<
+    (typeof PULPAL_DIAGNOSES)[number] | ""
+  >("");
+  const [corrApical, setCorrApical] = useState<
+    (typeof APICAL_DIAGNOSES)[number] | ""
+  >("");
   const [corrReason, setCorrReason] = useState("");
   const [corrMisunderstood, setCorrMisunderstood] = useState("");
+  const [corrErrorTypes, setCorrErrorTypes] = useState<string[]>([
+    "invalid_test_interpretation",
+  ]);
+  const [specialistIdentity, setSpecialistIdentity] = useState("");
   const [corrSaving, setCorrSaving] = useState(false);
   const [corrMessage, setCorrMessage] = useState<string | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
 
+  useEffect(() => {
+    fetch("/api/features")
+      .then((r) => r.json())
+      .then((data: FeatureFlags) => setFeatures(data))
+      .catch(() =>
+        setFeatures({
+          correctionRagEnabled: true,
+          taxonomyVersion: TAXONOMY_VERSION,
+          mvpMode: "clinical_agentic",
+        }),
+      );
+  }, []);
+
   const finalResult = useMemo(
-    () => [...events].reverse().find((e) => e.type === "final") as
-      | Extract<StreamEvent, { type: "final" }>
-      | undefined,
+    () =>
+      [...events].reverse().find((e) => e.type === "final") as
+        | Extract<StreamEvent, { type: "final" }>
+        | undefined,
+    [events],
+  );
+
+  const evidenceEvent = useMemo(
+    () =>
+      [...events].reverse().find((e) => e.type === "evidence") as
+        | Extract<StreamEvent, { type: "evidence" }>
+        | undefined,
     [events],
   );
 
@@ -51,7 +96,9 @@ export default function Home() {
       const res = await fetch("/api/diagnose", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(clinicalCase),
+        body: JSON.stringify({
+          ...clinicalCase,
+        }),
       });
       if (!res.ok || !res.body) {
         const t = await res.text();
@@ -86,7 +133,7 @@ export default function Home() {
   }
 
   async function submitCorrection() {
-    if (!finalResult) return;
+    if (!finalResult || !features?.correctionRagEnabled) return;
     setCorrSaving(true);
     setCorrMessage(null);
     try {
@@ -95,11 +142,19 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           case: clinicalCase,
+          agentStatus: finalResult.result.status,
           agentPulpal: finalResult.result.pulpalDiagnosis,
           agentApical: finalResult.result.apicalDiagnosis,
-          correctedPulpal: corrPulpal,
-          correctedApical: corrApical,
+          adjudicatedReferenceDiagnosis: {
+            status: corrStatus,
+            pulpal: corrPulpal || null,
+            apical: corrApical || null,
+          },
           correctionReasoning: corrReason,
+          errorTypes: corrErrorTypes,
+          specialistIdentity,
+          taxonomyVersion: TAXONOMY_VERSION,
+          approvalStatus: "pending",
           misunderstoodSummary: corrMisunderstood || undefined,
         }),
       });
@@ -140,13 +195,21 @@ export default function Home() {
       <header>
         <h1 className="page-title">Endodontic diagnosis</h1>
         <p className="page-lede">
-          Enter findings, run the agent, optionally save corrections for RAG.
-          Educational use only.
+          Open this site in any browser — no install. Agentic multi-stage
+          diagnosis · taxonomy {TAXONOMY_VERSION} · correction memory · can
+          abstain · clinician confirmation required. Educational decision
+          support only — not a medical device.
         </p>
+        {features ? (
+          <p className="page-lede">
+            Correction RAG: {features.correctionRagEnabled ? "on" : "off"}
+          </p>
+        ) : null}
       </header>
 
       <p className="section-label">Case</p>
       <ClinicalCaseForm value={clinicalCase} onChange={setClinicalCase} />
+
 
       <div className="toolbar">
         <button
@@ -157,14 +220,16 @@ export default function Home() {
         >
           {loading ? "Running…" : "Run"}
         </button>
-        <button
-          type="button"
-          className="btn btn--ghost"
-          onClick={exportCorrections}
-          disabled={exportBusy}
-        >
-          {exportBusy ? "Exporting…" : "Export corrections"}
-        </button>
+        {features?.correctionRagEnabled ? (
+          <button
+            type="button"
+            className="btn btn--ghost"
+            onClick={exportCorrections}
+            disabled={exportBusy}
+          >
+            {exportBusy ? "Exporting…" : "Export corrections"}
+          </button>
+        ) : null}
       </div>
 
       {error ? <p className="error-text">{error}</p> : null}
@@ -172,16 +237,21 @@ export default function Home() {
       {events.length > 0 ? (
         <section className="output-stack">
           {events.map((ev, i) => {
+            if (ev.type === "status") {
+              return (
+                <p key={`${i}-status`} className="body-text body-text--tight">
+                  {ev.message}
+                </p>
+              );
+            }
             if (ev.type === "rag") {
               return (
                 <article key={`${i}-rag`} className="output-block">
                   <h3 className="output-title">
                     Similar corrections ({ev.matchCount})
                   </h3>
-                  {ev.matchCount === 0 ? (
-                    <p className="body-text--tight body-text--flush">
-                      None retrieved.
-                    </p>
+                  {ev.matchCount === 0 || !ev.contextBlock ? (
+                    <p className="body-text body-text--tight">None retrieved.</p>
                   ) : (
                     <pre className="output-pre">{ev.contextBlock}</pre>
                   )}
@@ -196,56 +266,121 @@ export default function Home() {
                 </article>
               );
             }
-            if (ev.type === "final") {
-              return (
-                <article
-                  key={`${i}-final`}
-                  className="output-block output-block--final"
-                >
-                  <h3 className="output-title">Diagnosis</h3>
-                  <div className="diagnosis-row">
-                    <div>
-                      <div className="diagnosis-label">Pulpal</div>
-                      <div className="diagnosis-value">
-                        {ev.result.pulpalDiagnosis}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="diagnosis-label">Apical</div>
-                      <div className="diagnosis-value">
-                        {ev.result.apicalDiagnosis}
-                      </div>
-                    </div>
-                  </div>
-                  <p className="body-text">{ev.result.finalDiagnosisLine}</p>
-                  <p className="body-text body-text--tight">
-                    {ev.result.biologicalJustification}
-                  </p>
-                  {ev.result.warnings?.length ? (
-                    <ul className="warnings">
-                      {ev.result.warnings.map((w) => (
-                        <li key={w}>{w}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  <div className="toolbar toolbar--tight">
-                    <button
-                      type="button"
-                      className="btn btn--ghost"
-                      onClick={() => {
-                        setCorrPulpal(ev.result.pulpalDiagnosis);
-                        setCorrApical(ev.result.apicalDiagnosis);
-                        setShowCorrection(true);
-                      }}
-                    >
-                      Correct diagnosis
-                    </button>
-                  </div>
-                </article>
-              );
-            }
             return null;
           })}
+        </section>
+      ) : null}
+
+      {evidenceEvent ? (
+        <section className="output-block">
+          <h3 className="output-title">Evidence table</h3>
+          <div className="evidence-grid">
+            <div>
+              <div className="diagnosis-label">Supporting</div>
+              <ul className="warnings">
+                {evidenceEvent.evidenceFor.map((item) => (
+                  <li key={`for-${item.claim}`}>
+                    [{item.source}] {item.claim}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div>
+              <div className="diagnosis-label">Against / conflicts</div>
+              <ul className="warnings">
+                {evidenceEvent.evidenceAgainst.map((item) => (
+                  <li key={`against-${item.claim}`}>
+                    [{item.source}] {item.claim}
+                  </li>
+                ))}
+                {evidenceEvent.conflicts.map((c) => (
+                  <li key={`conflict-${c}`}>{c}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+          {evidenceEvent.missingRequiredData.length ? (
+            <>
+              <div className="diagnosis-label">Missing required data</div>
+              <ul className="warnings">
+                {evidenceEvent.missingRequiredData.map((m) => (
+                  <li key={m}>{m}</li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+          {evidenceEvent.recommendedNextTests.length ? (
+            <>
+              <div className="diagnosis-label">Recommended next tests</div>
+              <ul className="warnings">
+                {evidenceEvent.recommendedNextTests.map((m) => (
+                  <li key={m}>{m}</li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </section>
+      ) : null}
+
+      {finalResult ? (
+        <section className="output-block output-block--final">
+          <h3 className="output-title">Final diagnosis</h3>
+          <p className="body-text">
+            Status: <strong>{finalResult.result.status}</strong> · Taxonomy{" "}
+            {finalResult.result.taxonomyVersion}
+          </p>
+          {finalResult.result.status === "diagnosable" ? (
+            <div className="diagnosis-row">
+              <div>
+                <div className="diagnosis-label">Pulpal</div>
+                <div className="diagnosis-value">
+                  {finalResult.result.pulpalDiagnosis}
+                </div>
+              </div>
+              <div>
+                <div className="diagnosis-label">Apical</div>
+                <div className="diagnosis-value">
+                  {finalResult.result.apicalDiagnosis}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="body-text">
+              No AAE enum assigned. Complete missing data, resolve conflicts, or
+              refer.
+            </p>
+          )}
+          {finalResult.result.finalDiagnosisLine ? (
+            <p className="body-text">{finalResult.result.finalDiagnosisLine}</p>
+          ) : null}
+          {finalResult.result.biologicalJustification ? (
+            <p className="body-text body-text--tight">
+              {finalResult.result.biologicalJustification}
+            </p>
+          ) : null}
+          {finalResult.result.warnings?.length ? (
+            <ul className="warnings">
+              {finalResult.result.warnings.map((w) => (
+                <li key={w}>{w}</li>
+              ))}
+            </ul>
+          ) : null}
+          {features?.correctionRagEnabled ? (
+            <div className="toolbar toolbar--tight">
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => {
+                  setCorrStatus(finalResult.result.status);
+                  setCorrPulpal(finalResult.result.pulpalDiagnosis ?? "");
+                  setCorrApical(finalResult.result.apicalDiagnosis ?? "");
+                  setShowCorrection(true);
+                }}
+              >
+                Submit correction
+              </button>
+            </div>
+          ) : null}
         </section>
       ) : null}
 
@@ -259,17 +394,41 @@ export default function Home() {
           <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
             <h2 className="modal-title">Save correction</h2>
             <p className="modal-lede">
-              No patient identifiers. Explain the error so similar cases pick
-              this up in RAG.
+              No patient identifiers. Explain the error so similar cases retrieve
+              this lesson in RAG.
             </p>
             <label className="modal-field">
-              <span>Pulpal</span>
+              <span>Specialist identity</span>
+              <input
+                value={specialistIdentity}
+                onChange={(e) => setSpecialistIdentity(e.target.value)}
+              />
+            </label>
+            <label className="modal-field">
+              <span>Correct status</span>
+              <select
+                value={corrStatus}
+                onChange={(e) =>
+                  setCorrStatus(e.target.value as DiagnosticStatus)
+                }
+              >
+                <option value="diagnosable">diagnosable</option>
+                <option value="insufficient_data">insufficient_data</option>
+                <option value="conflicting_data">conflicting_data</option>
+                <option value="out_of_scope">out_of_scope</option>
+              </select>
+            </label>
+            <label className="modal-field">
+              <span>Correct pulpal</span>
               <select
                 value={corrPulpal}
                 onChange={(e) =>
-                  setCorrPulpal(e.target.value as (typeof PULPAL_DIAGNOSES)[number])
+                  setCorrPulpal(
+                    e.target.value as (typeof PULPAL_DIAGNOSES)[number] | "",
+                  )
                 }
               >
+                <option value="">null</option>
                 {PULPAL_DIAGNOSES.map((p) => (
                   <option key={p} value={p}>
                     {p}
@@ -278,16 +437,32 @@ export default function Home() {
               </select>
             </label>
             <label className="modal-field">
-              <span>Apical</span>
+              <span>Correct apical</span>
               <select
                 value={corrApical}
                 onChange={(e) =>
-                  setCorrApical(e.target.value as (typeof APICAL_DIAGNOSES)[number])
+                  setCorrApical(
+                    e.target.value as (typeof APICAL_DIAGNOSES)[number] | "",
+                  )
                 }
               >
+                <option value="">null</option>
                 {APICAL_DIAGNOSES.map((p) => (
                   <option key={p} value={p}>
                     {p}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="modal-field">
+              <span>Error type</span>
+              <select
+                value={corrErrorTypes[0]}
+                onChange={(e) => setCorrErrorTypes([e.target.value])}
+              >
+                {ERROR_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
                   </option>
                 ))}
               </select>
@@ -301,7 +476,7 @@ export default function Home() {
               />
             </label>
             <label className="modal-field">
-              <span>Misunderstood (optional)</span>
+              <span>What did the agent misunderstand? (optional)</span>
               <textarea
                 rows={3}
                 value={corrMisunderstood}
@@ -313,7 +488,11 @@ export default function Home() {
                 type="button"
                 className="btn"
                 onClick={submitCorrection}
-                disabled={corrSaving || corrReason.trim().length < 10}
+                disabled={
+                  corrSaving ||
+                  corrReason.trim().length < 10 ||
+                  specialistIdentity.trim().length < 2
+                }
               >
                 {corrSaving ? "Saving…" : "Save"}
               </button>

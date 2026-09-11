@@ -1,0 +1,19 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ENDO_MODEL: ${ENDO_MODEL:-gpt-4o}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      ENABLE_CORRECTION_RAG: "true"
+      CORRECTIONS_JSON_PATH: /data/corrections.json
+    volumes:
+      - endo-data:/data
+    restart: unless-stopped
+
+volumes:
+  endo-data:

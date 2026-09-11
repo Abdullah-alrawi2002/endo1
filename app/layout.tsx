@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Endodontic Diagnostic Agent",
   description:
-    "Agentic endodontic diagnosis with correction memory (RAG). Educational use only.",
+    "AAE pulpal and apical diagnosis from structured clinical findings. Educational use only.",
 };
 
 export default function RootLayout({

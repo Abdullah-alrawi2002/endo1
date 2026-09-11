@@ -1,19 +1,52 @@
-import { getDb } from "@/lib/correction-rag/db";
 import { serializeCaseCanonical } from "@/lib/correction-rag/format-case";
-import { searchSimilarCorrections } from "@/lib/correction-rag/search";
+import { searchSimilarCorrections } from "@/lib/correction-rag/store";
 import { createLlmClient } from "@/lib/llm";
 import { loadCurriculum } from "@/lib/prompts/load-curriculum";
 import {
-  APICAL_DIAGNOSES,
+  STAGE_TITLES,
+  diagnosticCriticSystemPrompt,
+  mimicConflictSystemPrompt,
+  stage1SystemPrompt,
+  stage2SystemPrompt,
+  stage3SystemPrompt,
+  stage4SystemPrompt,
+} from "@/lib/prompts/agent-stages";
+import {
+  TAXONOMY_VERSION,
   type ClinicalCase,
   finalDiagnosisSchema,
   type FinalDiagnosis,
-  PULPAL_DIAGNOSES,
 } from "@/lib/schemas/clinical-case";
+import {
+  abstentionResult,
+  runClinicalGate,
+  verifyDiagnosisProposal,
+} from "@/lib/endodontic-agent/clinical-verifier";
+import { isCorrectionRagEnabled } from "@/lib/features";
+
+export type DiagnosisPipelineOptions = {
+  skipRag?: boolean;
+};
+
+export type DiagnosisPipelineResult = {
+  final: FinalDiagnosis;
+  statusMessage: string;
+  gateStatus: FinalDiagnosis["status"];
+  ragMatchCount: number;
+};
 
 export type StreamEvent =
+  | { type: "status"; message: string }
   | { type: "rag"; matchCount: number; contextBlock: string }
   | { type: "stage"; stage: 1 | 2 | 3 | 4; title: string; content: string }
+  | {
+      type: "evidence";
+      evidenceFor: FinalDiagnosis["evidenceFor"];
+      evidenceAgainst: FinalDiagnosis["evidenceAgainst"];
+      conflicts: string[];
+      missingRequiredData: string[];
+      recommendedNextTests: string[];
+    }
   | { type: "final"; result: FinalDiagnosis }
   | { type: "error"; message: string };
 
@@ -21,6 +54,11 @@ function ragTopK(): number {
   const n = parseInt(process.env.RAG_TOP_K ?? "5", 10);
   if (Number.isNaN(n)) return 5;
   return Math.min(20, Math.max(1, n));
+}
+
+function ragMinScore(): number {
+  const n = Number.parseFloat(process.env.RAG_MIN_SCORE ?? "0.78");
+  return Number.isFinite(n) ? n : 0.78;
 }
 
 function formatRagBlock(
@@ -35,13 +73,14 @@ function formatRagBlock(
     misunderstood: string | null;
   }>,
 ): string {
-  if (!hits.length) return "";
-  const parts = hits.map((h, i) => {
+  const filtered = hits.filter((h) => h.score >= ragMinScore());
+  if (!filtered.length) return "";
+  const parts = filtered.map((h, i) => {
     const mu = h.misunderstood?.trim()
       ? `\nWhat was misunderstood: ${h.misunderstood.trim()}`
       : "";
     return [
-      `--- Correction ${i + 1} (similarity ${h.score.toFixed(3)}) ---`,
+      `--- Correction ${i + 1} (similarity ${h.score.toFixed(3)}; dual-reviewed approved) ---`,
       "Case:",
       h.caseCanonical,
       "",
@@ -55,14 +94,14 @@ function formatRagBlock(
   });
   return [
     "## Clinician corrections from similar cases",
-    "These are institutional teaching examples. Weight them heavily in your reasoning.",
-    "If any correction conflicts with immutable test logic (e.g., Cold negative + EPT negative still implying vital pulp), the curriculum and raw inputs override the correction—state that conflict explicitly.",
+    "These are dual-reviewed, approved, PHI-free teaching examples at the current taxonomy.",
+    "Unreviewed corrections are evaluation cases only and are never retrieved here.",
+    "Weight them as soft priors. Curriculum and raw inputs override corrections on conflicts.",
     "",
     ...parts,
   ].join("\n");
 }
 
-/** Strip optional ```json fences (Claude / some Gemini outputs). */
 function parseModelJson(raw: string): unknown {
   let s = raw.trim();
   if (s.startsWith("```")) {
@@ -73,56 +112,81 @@ function parseModelJson(raw: string): unknown {
   return JSON.parse(s);
 }
 
-const STAGE4_JSON_INSTRUCTION = `Return ONLY a JSON object with these exact keys:
-- "pulpalDiagnosis": one of ${JSON.stringify([...PULPAL_DIAGNOSES])}
-- "apicalDiagnosis": one of ${JSON.stringify([...APICAL_DIAGNOSES])}
-- "finalDiagnosisLine": a single line combining pulpal + apical (student-style wording)
-- "biologicalJustification": 2–6 sentences explaining mechanisms at dental-student depth
-- "warnings": optional string array (may be empty or omitted)
+function emitEvidence(gate: ReturnType<typeof runClinicalGate>, extra?: Partial<FinalDiagnosis>): Extract<StreamEvent, { type: "evidence" }> {
+  return {
+    type: "evidence",
+    evidenceFor: extra?.evidenceFor ?? gate.evidenceFor,
+    evidenceAgainst: extra?.evidenceAgainst ?? gate.evidenceAgainst,
+    conflicts: extra?.conflicts ?? gate.conflicts,
+    missingRequiredData: extra?.missingRequiredData ?? gate.missingRequiredData,
+    recommendedNextTests: extra?.recommendedNextTests ?? gate.recommendedNextTests,
+  };
+}
 
-The pulpal and apical strings must match exactly (including capitalization).`;
-
+/**
+ * Agentic multi-stage diagnosis pipeline:
+ * Stage 0 gate → RAG (approved-only) → Stage 1 interpretation →
+ * independent pulpal / apical / mimic → synthesis → diagnostic critic →
+ * deterministic verifier.
+ */
 export async function* runDiagnosisPipeline(
-  clinicalCase: ClinicalCase,
+  clinicalCaseInput: ClinicalCase,
+  options: DiagnosisPipelineOptions = {},
 ): AsyncGenerator<StreamEvent> {
-  const llm = createLlmClient();
-  const curriculum = loadCurriculum();
-  const caseBlock = serializeCaseCanonical(clinicalCase);
-  const caseJson = JSON.stringify(clinicalCase, null, 2);
-
-  let ragContext = "";
   try {
-    const db = getDb();
-    const qVec = await llm.embedText(caseBlock);
-    const hits = searchSimilarCorrections(db, qVec, ragTopK());
-    ragContext = formatRagBlock(hits);
-    yield {
-      type: "rag",
-      matchCount: hits.length,
-      contextBlock: ragContext,
-    };
-  } catch {
-    yield { type: "rag", matchCount: 0, contextBlock: "" };
-  }
+    const clinicalCase = clinicalCaseInput;
+    yield { type: "status", message: "Running Stage 0 scope/validity gate…" };
 
-  const stage1System = [
-    "You are an expert endodontic educator AI. Follow the curriculum exactly.",
-    "",
-    curriculum,
-    "",
-    ragContext || "(No similar stored corrections were retrieved.)",
-    "",
-    "Stage 1 task — Pulpal + test biology framing:",
-    "1) Summarize Cold and EPT and what they imply biologically.",
-    "2) Summarize Percussion, Palpation, and PARL and what they imply outside the root.",
-    "3) Note any conflicts, missing optional information, or caveats.",
-    "Do not output the final pulpal/apical labels yet (those come in later stages).",
-  ].join("\n");
+    const gate = runClinicalGate(clinicalCase);
+    if (gate.status !== "diagnosable") {
+      const final = abstentionResult(gate);
+      yield { type: "status", message: `Stage 0 gate: ${gate.status}. Abstaining.` };
+      yield emitEvidence(gate, final);
+      yield { type: "final", result: final };
+      return;
+    }
 
-  let stage1Content: string;
-  try {
-    stage1Content = await llm.chatComplete([
-      { role: "system", content: stage1System },
+    const llm = createLlmClient();
+    const curriculum = loadCurriculum();
+    const caseBlock = serializeCaseCanonical(clinicalCase);
+    const caseJson = JSON.stringify(clinicalCase, null, 2);
+
+    let ragContext = "";
+    let ragMatchCount = 0;
+    if (!options.skipRag && isCorrectionRagEnabled()) {
+      try {
+        const qVec = await llm.embedText(caseBlock);
+        // Governance: approved + current taxonomy + ≥2 reviewers + no PHI
+        const hits = searchSimilarCorrections(qVec, ragTopK(), {
+          approvalStatus: "approved",
+          taxonomyVersion: TAXONOMY_VERSION,
+          minReviewerCount: 2,
+          allowPhi: false,
+        });
+        ragMatchCount = hits.length;
+        ragContext = formatRagBlock(hits);
+        yield {
+          type: "rag",
+          matchCount: ragMatchCount,
+          contextBlock: ragContext,
+        };
+      } catch {
+        yield { type: "rag", matchCount: 0, contextBlock: "" };
+      }
+    } else {
+      yield {
+        type: "rag",
+        matchCount: 0,
+        contextBlock: "",
+      };
+    }
+
+    yield { type: "status", message: "Stage 1 — interpreting tests…" };
+    const stage1Content = await llm.chatComplete([
+      {
+        role: "system",
+        content: stage1SystemPrompt(curriculum, ragContext),
+      },
       {
         role: "user",
         content: `Clinical case (structured JSON):\n${caseJson}\n\nHuman-readable summary:\n${caseBlock}`,
@@ -131,102 +195,65 @@ export async function* runDiagnosisPipeline(
     yield {
       type: "stage",
       stage: 1,
-      title: "Stage 1 — Test interpretation",
+      title: STAGE_TITLES[1],
       content: stage1Content,
     };
-  } catch (e) {
+
+    // Independent specialists after interpretation — no pulpal→apical anchoring.
     yield {
-      type: "error",
-      message: e instanceof Error ? e.message : "Stage 1 failed",
+      type: "status",
+      message: "Running independent pulpal, apical, and mimic/conflict agents…",
     };
-    return;
-  }
+    const sharedEvidenceUser = [
+      `Case JSON:\n${caseJson}`,
+      `Summary:\n${caseBlock}`,
+      `Stage 1 analysis:\n${stage1Content}`,
+      "Imaging alone cannot establish pulp vitality.",
+    ].join("\n\n");
 
-  const stage2System = [
-    "You are the pulpal diagnostician.",
-    `You MUST choose exactly ONE pulpal diagnosis from this list (exact spelling): ${PULPAL_DIAGNOSES.join(" | ")}`,
-    "Use the curriculum pulpal rules. Respect hard logic: when EPT was performed, if clinical.cold is negative AND clinical.ept is negative, pulpal must be Pulp Necrosis unless explicit user notes document a false-negative scenario.",
-    "Output format: first line exactly: Pulpal Diagnosis: <one of the allowed strings>",
-    "Then 4–10 sentences explaining your reasoning with citations to cold/EPT and optional fields.",
-  ].join("\n");
-
-  let stage2Content: string;
-  try {
-    stage2Content = await llm.chatComplete([
-      { role: "system", content: stage2System },
-      {
-        role: "user",
-        content: `Case JSON:\n${caseJson}\n\nSummary:\n${caseBlock}\n\nStage 1 analysis:\n${stage1Content}`,
-      },
+    const [stage2Content, stage3Content, mimicContent] = await Promise.all([
+      llm.chatComplete([
+        { role: "system", content: stage2SystemPrompt() },
+        { role: "user", content: sharedEvidenceUser },
+      ]),
+      llm.chatComplete([
+        { role: "system", content: stage3SystemPrompt() },
+        { role: "user", content: sharedEvidenceUser },
+      ]),
+      llm.chatComplete([
+        { role: "system", content: mimicConflictSystemPrompt() },
+        { role: "user", content: sharedEvidenceUser },
+      ]),
     ]);
+
     yield {
       type: "stage",
       stage: 2,
-      title: "Stage 2 — Pulpal diagnosis",
+      title: STAGE_TITLES[2],
       content: stage2Content,
     };
-  } catch (e) {
-    yield {
-      type: "error",
-      message: e instanceof Error ? e.message : "Stage 2 failed",
-    };
-    return;
-  }
-
-  const stage3System = [
-    "You are the apical diagnostician.",
-    `You MUST choose exactly ONE apical diagnosis from this list (exact spelling): ${APICAL_DIAGNOSES.join(" | ")}`,
-    "Use percussion, palpation, PARL, and pulpal context. Apply SAP vs AAA and AAP vs CAA rules from the curriculum.",
-    "Output format: first line exactly: Apical Diagnosis: <one of the allowed strings>",
-    "Then 4–10 sentences explaining your reasoning.",
-  ].join("\n");
-
-  let stage3Content: string;
-  try {
-    stage3Content = await llm.chatComplete([
-      { role: "system", content: stage3System },
-      {
-        role: "user",
-        content: `Case JSON:\n${caseJson}\n\nSummary:\n${caseBlock}\n\nStage 1:\n${stage1Content}\n\nStage 2:\n${stage2Content}`,
-      },
-    ]);
     yield {
       type: "stage",
       stage: 3,
-      title: "Stage 3 — Apical diagnosis",
-      content: stage3Content,
+      title: STAGE_TITLES[3],
+      content: `${stage3Content}\n\n--- Mimic/conflict (independent) ---\n${mimicContent}`,
     };
-  } catch (e) {
-    yield {
-      type: "error",
-      message: e instanceof Error ? e.message : "Stage 3 failed",
-    };
-    return;
-  }
 
-  const stage4System = [
-    "You are the synthesizer and verifier.",
-    curriculum,
-    "",
-    ragContext ? `${ragContext}\n` : "",
-    STAGE4_JSON_INSTRUCTION,
-    "",
-    "Verify internal consistency with the raw tests:",
-    "- When clinical.ept is not 'not_performed', if clinical.cold is negative AND clinical.ept is negative, pulpalDiagnosis must be Pulp Necrosis (unless explicit documented false-negative in notes).",
-    "- Ensure apicalDiagnosis matches percussion/palpation and imaging findings (periapical RL, widened PDL, J-shaped RL, resorption, visual swelling/sinus tract).",
-    "If you must override Stage 2 or Stage 3 to fix inconsistency, do so and explain briefly inside biologicalJustification or warnings.",
-  ].join("\n");
+    yield { type: "status", message: "Stage 4 — synthesis (coherence check)…" };
+    const stage4System = stage4SystemPrompt(curriculum, ragContext);
+    const stage4User = [
+      `Case JSON:\n${caseJson}`,
+      `Summary:\n${caseBlock}`,
+      `Stage 1:\n${stage1Content}`,
+      `Independent pulpal agent:\n${stage2Content}`,
+      `Independent apical agent:\n${stage3Content}`,
+      `Independent mimic/conflict agent:\n${mimicContent}`,
+      "Gate warnings:",
+      ...gate.warnings,
+      "Synthesize only after checking coherence among independent agents.",
+      "Produce the JSON object now.",
+    ].join("\n\n");
 
-  const stage4User = [
-    `Case JSON:\n${caseJson}`,
-    `Summary:\n${caseBlock}`,
-    `Stage 1:\n${stage1Content}`,
-    `Stage 2:\n${stage2Content}`,
-    `Stage 3:\n${stage3Content}`,
-    "Produce the JSON object now.",
-  ].join("\n\n");
-
-  try {
     let raw = await llm.chatComplete(
       [
         { role: "system", content: stage4System },
@@ -257,20 +284,182 @@ export async function* runDiagnosisPipeline(
       };
       return;
     }
-    const parsed = attempt.data;
+
+    let proposal = attempt.data;
+    proposal = finalDiagnosisSchema.parse({
+      ...proposal,
+      taxonomyVersion: TAXONOMY_VERSION,
+      clinicianConfirmationRequired: true,
+      evidenceFor: [...gate.evidenceFor, ...proposal.evidenceFor],
+      evidenceAgainst: [...gate.evidenceAgainst, ...proposal.evidenceAgainst],
+      conflicts: [...new Set([...gate.conflicts, ...proposal.conflicts])],
+      missingRequiredData: [
+        ...new Set([
+          ...gate.missingRequiredData,
+          ...proposal.missingRequiredData,
+        ]),
+      ],
+      recommendedNextTests: [
+        ...new Set([
+          ...gate.recommendedNextTests,
+          ...proposal.recommendedNextTests,
+        ]),
+      ],
+      warnings: [
+        ...(proposal.warnings ?? []),
+        ...gate.warnings,
+        "Clinician confirmation required. Educational decision support only.",
+      ],
+    });
+
     yield {
       type: "stage",
       stage: 4,
-      title: "Stage 4 — Synthesis (structured)",
-      content: JSON.stringify(parsed, null, 2),
+      title: STAGE_TITLES[4],
+      content: JSON.stringify(proposal, null, 2),
     };
-    yield { type: "final", result: parsed };
+
+    // Diagnostic critic between synthesis and deterministic verifier
+    yield { type: "status", message: "Diagnostic critic reviewing synthesis…" };
+    const criticRaw = await llm.chatComplete([
+      { role: "system", content: diagnosticCriticSystemPrompt() },
+      {
+        role: "user",
+        content: [
+          `Stage 1:\n${stage1Content}`,
+          `Pulpal:\n${stage2Content}`,
+          `Apical:\n${stage3Content}`,
+          `Mimic/conflict:\n${mimicContent}`,
+          `Synthesizer JSON:\n${JSON.stringify(proposal, null, 2)}`,
+        ].join("\n\n"),
+      },
+    ]);
+    const criticContradicted = /^Critic:\s*contradicted/im.test(criticRaw.trim());
+    if (criticContradicted) {
+      const rejected = abstentionResult({
+        ...gate,
+        status: "conflicting_data",
+        conflicts: [
+          ...gate.conflicts,
+          `Diagnostic critic contradicted synthesis: ${criticRaw.slice(0, 400)}`,
+        ],
+      });
+      const final: FinalDiagnosis = {
+        ...rejected,
+        evidenceFor: proposal.evidenceFor,
+        evidenceAgainst: [
+          ...proposal.evidenceAgainst,
+          {
+            claim: "Diagnostic critic contradicted synthesizer coherence",
+            source: "verifier",
+          },
+        ],
+        biologicalJustification: proposal.biologicalJustification,
+        warnings: [
+          ...(proposal.warnings ?? []),
+          "Diagnostic critic rejected proposal before deterministic verifier.",
+        ],
+      };
+      yield { type: "status", message: "Diagnostic critic contradicted synthesis." };
+      yield emitEvidence(gate, final);
+      yield { type: "final", result: final };
+      return;
+    }
+
+    const verification = verifyDiagnosisProposal(clinicalCase, gate, {
+      status: proposal.status,
+      pulpalDiagnosis: proposal.pulpalDiagnosis,
+      apicalDiagnosis: proposal.apicalDiagnosis,
+    });
+
+    if (!verification.ok) {
+      const rejected = abstentionResult({
+        ...gate,
+        status: "conflicting_data",
+        conflicts: [...gate.conflicts, verification.reason],
+      });
+      const final: FinalDiagnosis = {
+        ...rejected,
+        evidenceFor: proposal.evidenceFor,
+        evidenceAgainst: [
+          ...proposal.evidenceAgainst,
+          { claim: verification.reason, source: "verifier" },
+        ],
+        biologicalJustification: proposal.biologicalJustification,
+        warnings: [
+          ...(proposal.warnings ?? []),
+          `Verifier rejected proposal: ${verification.reason}`,
+        ],
+      };
+      yield { type: "status", message: `Verifier rejected: ${verification.reason}` };
+      yield emitEvidence(gate, final);
+      yield { type: "final", result: final };
+      return;
+    }
+
+    if (proposal.status !== "diagnosable") {
+      const final: FinalDiagnosis = {
+        ...proposal,
+        pulpalDiagnosis: null,
+        apicalDiagnosis: null,
+        finalDiagnosisLine: null,
+        clinicianConfirmationRequired: true,
+      };
+      yield emitEvidence(gate, final);
+      yield { type: "final", result: final };
+      return;
+    }
+
+    const final: FinalDiagnosis = {
+      ...proposal,
+      status: "diagnosable",
+      finalDiagnosisLine:
+        proposal.finalDiagnosisLine ??
+        `${proposal.pulpalDiagnosis} with ${proposal.apicalDiagnosis}`,
+      clinicianConfirmationRequired: true,
+      warnings: [
+        ...(proposal.warnings ?? []),
+        "Diagnostic critic: passed (or abstained without contradiction).",
+      ],
+    };
+
+    yield { type: "status", message: "Diagnosis complete — clinician confirmation required." };
+    yield emitEvidence(gate, final);
+    yield { type: "final", result: final };
   } catch (e) {
     yield {
       type: "error",
-      message: e instanceof Error ? e.message : "Stage 4 failed",
+      message: e instanceof Error ? e.message : "Diagnosis failed",
     };
   }
+}
+
+/** Collect the final result from the streaming pipeline (batch / tests). */
+export async function runDiagnosisOnce(
+  clinicalCase: ClinicalCase,
+  options: DiagnosisPipelineOptions = {},
+): Promise<{
+  final: FinalDiagnosis;
+  statusMessage: string;
+  gateStatus: FinalDiagnosis["status"];
+  ragMatchCount: number;
+}> {
+  let final: FinalDiagnosis | null = null;
+  let statusMessage = "";
+  let ragMatchCount = 0;
+  for await (const ev of runDiagnosisPipeline(clinicalCase, options)) {
+    if (ev.type === "status") statusMessage = ev.message;
+    if (ev.type === "rag") ragMatchCount = ev.matchCount;
+    if (ev.type === "final") final = ev.result;
+    if (ev.type === "error") throw new Error(ev.message);
+  }
+  if (!final) throw new Error("Pipeline ended without a final diagnosis");
+  return {
+    final,
+    statusMessage,
+    gateStatus: final.status,
+    ragMatchCount,
+  };
 }
 
 /** Embed the full correction document for storage (RAG ingest). */

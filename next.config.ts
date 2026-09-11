@@ -8,7 +8,11 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: projectRoot,
   },
-  serverExternalPackages: ["better-sqlite3"],
+  // Ensure curriculum markdown ships with serverless API functions on Vercel.
+  outputFileTracingIncludes: {
+    "/api/**/*": ["./lib/prompts/**/*"],
+    "/*": ["./lib/prompts/**/*"],
+  },
 };
 
 export default nextConfig;

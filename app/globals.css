@@ -320,7 +320,198 @@ body {
   border-top: 1px solid var(--line);
 }
 
+/* CT analysis */
+.scan-disclaimer {
+  margin: 0 0 0.85rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.ct-upload-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.85rem;
+}
+
+.ct-file-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.75rem;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.ct-file-label input {
+  width: 100%;
+  font: inherit;
+}
+
+.ct-file-summary {
+  margin: 0.65rem 0 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.ct-result {
+  margin-top: 1rem;
+  padding: 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--field-bg);
+}
+
+.scan-result__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.scan-result__modality {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.scan-confidence {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.scan-confidence--high {
+  color: #067647;
+  border-color: #067647;
+}
+
+.scan-confidence--moderate {
+  color: #a15c00;
+  border-color: #a15c00;
+}
+
+.scan-confidence--low {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.scan-provider {
+  margin: 0.75rem 0 0;
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+.body-text--tight {
+  margin-top: 0.5rem;
+}
+
+.evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.ct-metrics {
+  margin-top: 0.85rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem 1rem;
+}
+
+@media (max-width: 34rem) {
+  .evidence-grid,
+  .ct-upload-options,
+  .ct-metrics {
+    grid-template-columns: 1fr;
+  }
+}
+
 code,
 pre {
   font-family: ui-monospace, "Cascadia Code", "Source Code Pro", monospace;
+}
+
+.workflow-steps {
+  margin: 1rem 0 0;
+  padding: 0.85rem 1rem 0.85rem 1.5rem;
+  list-style: decimal;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--field-bg);
+}
+
+.workflow-steps li {
+  margin: 0.25rem 0;
+}
+
+.workflow-steps strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.patel-code-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
+  margin: 0.75rem 0 1rem;
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.patel-code-hero__label {
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.patel-code-hero__value {
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.patel-code-hero__flag {
+  font-size: 0.75rem;
+  color: var(--danger);
+}
+
+.output-block--plan {
+  border-bottom: 1px solid var(--line);
+}
+
+.plan-primary {
+  margin: 0.75rem 0 1rem;
+}
+
+.plan-candidate {
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.plan-sequence {
+  margin: 0.35rem 0 0.75rem;
+  padding-left: 1.1rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.shell--wide {
+  max-width: 42rem;
 }

@@ -2,6 +2,8 @@ import { clinicalCaseSchema } from "@/lib/schemas/clinical-case";
 import { runDiagnosisPipeline } from "@/lib/endodontic-agent/run-pipeline";
 
 export const runtime = "nodejs";
+/** Multi-stage LLM calls need a longer budget on hosted platforms. */
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   let body: unknown;
@@ -43,7 +45,7 @@ export async function POST(req: Request) {
   return new Response(stream, {
     headers: {
       "Content-Type": "application/x-ndjson; charset=utf-8",
-      "Cache-Control": "no-store",
+      "Cache-Control": "no-cache, no-transform",
     },
   });
 }
