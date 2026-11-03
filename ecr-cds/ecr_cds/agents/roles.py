@@ -332,14 +332,18 @@ class RadiologistAgent(Agent):
         bundle = fb_ev.content if fb_ev else None
         f_shift = feature_logodds(bundle)
         f_notes = bundle_feature_notes(bundle) if bundle else {"for": [], "against": [], "confounders": []}
-        post = dict(rule_post)
-        if penalty or f_shift:
-            logp = np.log(np.array([max(post[h], 1e-9) for h in HYPOTHESES]))
+        feature_nudge_dropped = None
+
+        def shifted(shift):
+            if not penalty and not shift:
+                return dict(rule_post)
+            logp = np.log(np.array([max(rule_post[h], 1e-9) for h in HYPOTHESES]))
             logp[HYPOTHESES.index("ECR")] -= penalty
-            for h, w in f_shift.items():
+            for h, w in shift.items():
                 logp[HYPOTHESES.index(h)] += w
             p = np.exp(logp - logp.max()); p /= p.sum()
-            post = {h: round(float(x), 4) for h, x in zip(HYPOTHESES, p)}
+            return {h: round(float(x), 4) for h, x in zip(HYPOTHESES, p)}
+        post = shifted(f_shift)
         # optional model second opinion
         llm_post, llm_out = None, None
         user = json.dumps({"descriptors": d.to_dict(),
@@ -392,6 +396,11 @@ class RadiologistAgent(Agent):
             if abstain:
                 bb.say(self.name, f"candidate {d.component_id}: model opinion abstained (DSE {dse['dse']:.2f} > {llm_out.get('_dse_threshold')}, "
                                   f"{dse['n_clusters']} clusters / {dse['n_samples']} samples); rule result only")
+                if f_shift:
+                    # the same model read the same frame inconsistently: its categorical feature reading gets no weight either
+                    feature_nudge_dropped = "model_abstained_on_differential_for_same_frame"
+                    f_shift = {}
+                    post = shifted(f_shift)
             elif grounding and grounding.get("verdict") == "weak":
                 bb.say(self.name, f"candidate {d.component_id}: model opinion weakly grounded (P(ECR) unchanged after filling the "
                                   f"candidate: {grounding['original_p_ecr']:.2f} -> {grounding['counterfactual_p_ecr']:.2f}); weight {llm_weight:.2f}")
@@ -412,7 +421,7 @@ class RadiologistAgent(Agent):
                        "criteria_for_ecr": fired_for, "criteria_against_ecr": fired_against,
                        "criteria_not_assessable": not_assessable, "skeptic_penalty_logodds": round(penalty, 3),
                        "feature_logodds": {h: round(w, 3) for h, w in f_shift.items()}, "feature_notes": f_notes,
-                       "feature_bundle_used": bool(bundle),
+                       "feature_bundle_used": bool(bundle), "feature_nudge_dropped": feature_nudge_dropped,
                        "weights_version": self.weights_version, "calibrated": False,
                        "band": confidence_band(combined["ECR"], capped), "band_capped_by_unverified_anatomy": capped},
                       confidence=combined["ECR"], basis="llm+rule" if (llm_post and llm_weight > 0) else "rule",

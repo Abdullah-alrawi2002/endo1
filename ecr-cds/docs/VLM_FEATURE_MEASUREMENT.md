@@ -222,7 +222,9 @@ clinician action; they are never selected automatically.
   differences), never changing dispositions.
 * `RadiologistAgent` adds a per-hypothesis log-odds nudge from the assessed visual features
   (`FEATURE_LOGODDS`, capped at ±0.6, zero on abstention / geometry-only), includes the bundle in the model
-  prompt, and records `feature_logodds`, `feature_notes`, `feature_bundle_used`.
+  prompt, and records `feature_logodds`, `feature_notes`, `feature_bundle_used`. If the model's differential
+  opinion on the same frame abstains (high semantic entropy), the feature nudge is dropped as well
+  (`feature_nudge_dropped`), so the rev 2.8 invariant "abstention -> rule posterior kept" still holds.
 * `SkepticAgent` raises challenges for unverified model values (minor), VLM / geometry disagreements
   (moderate), model-flagged confounders (restoration margin, burnout, beam hardening), abstention and
   screen / model portal disagreements. Model challenges are never "major".
