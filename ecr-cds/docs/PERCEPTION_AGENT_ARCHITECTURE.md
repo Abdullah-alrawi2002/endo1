@@ -44,7 +44,9 @@ VerifierAgent     critic re-inspection: reproduce_candidate + evidence_frame; lo
 RadiologistAgent  posterior from criteria with the context prior; answers Q1-Q7; optional model second opinion
 SkepticAgent      adversarial challenges (artefacts, landmarks, mimics); penalises ECR log-odds
 ClinicalCorrelationAgent  Q8 from ClinicalFindings (chart hints fill unset fields)
-ClassifierAgent / TreatmentPlannerAgent   Patel 3-D code, matrix + constrained policy
+FeatureMeasurementAgent / ExtentSummaryAgent   VLM visual features + voxel measurements -> descriptive extent (rev 2.9)
+TreatmentPlannerAgent                     measurement-indexed safe set + constrained policy
+                                          (legacy opt-in: ClassifierAgent Patel 3-D code + matrix)
 CoverageAgent     examined vs chief-complaint teeth, missing prerequisites with how-to-resolve
 KnowledgeAgent    guideline citations for each answered question, plan step and gap; CDT codes
 Moderator         status, statement, actions required

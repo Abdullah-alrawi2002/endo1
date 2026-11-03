@@ -9,6 +9,14 @@ import tempfile
 import nbformat
 from nbclient import NotebookClient
 
+def _stage_label(conference):
+    se = conference.get("suggested_extent")
+    if se:
+        return f"{se['extent_descriptor']} / {se['pulp_relationship']} / {se['access_descriptor']}"
+    sp = conference.get("suggested_patel")   # legacy scheme only
+    return f"legacy Patel {sp['code']}" if sp else "no extent summary"
+
+
 p = argparse.ArgumentParser()
 p.add_argument("--scan", required=True)
 p.add_argument("--output", required=True)
@@ -81,7 +89,7 @@ with tempfile.TemporaryDirectory(prefix="ecr_v23_") as run:
                  f"- **Status:** `{conference['status']}` (backend `{conference.get('backend')}`: {conference.get('backend_status')}, {conference.get('rounds')} debate rounds).",
                  f"- **Suggested diagnosis:** {dx.get('statement', 'none')}",
                  f"- **Confidence band:** {dx.get('band', 'n/a')} (uncalibrated; capped while anatomy is unreviewed).",
-                 f"- **Suggested Patel / plan:** " + (f"{conference['suggested_patel']['code']} -> {conference['suggested_plan']['rule_recommendation']['primary']} (conditional on {conference['suggested_plan']['conditional_on']})"
+                 f"- **Suggested extent / plan:** " + (f"{_stage_label(conference)} -> {conference['suggested_plan']['rule_recommendation']['primary']} (conditional on {conference['suggested_plan']['conditional_on']})"
                                                      if conference.get("suggested_plan") else "withheld (ECR not suggested)."), ""]
         if dx.get("diagnostic_questions"):
             rows += ["| # | question | answer |", "|---|---|---|"] + [f"| {q['id']} | {q['question']} | {q['answer']} |" for q in dx["diagnostic_questions"]]

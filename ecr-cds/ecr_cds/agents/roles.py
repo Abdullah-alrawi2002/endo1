@@ -5,8 +5,13 @@ AnatomyAgent        -> tooth / canal / landmarks and their reliability
 LesionScreeningAgent-> candidate defects + quantitative visual descriptors + tiles
 RadiologistAgent    -> per-candidate differential diagnosis (criteria + optional LLM/VLM)
 SkepticAgent        -> adversarial review: artefacts, landmark errors, over-reading
-ClassifierAgent     -> Patel 3D code for the candidate the conference accepts as suggested ECR
-TreatmentPlannerAgent -> matrix + modifiers + constrained RL policy, with contingencies
+FeatureMeasurementAgent (feature_measurement.py, rev 2.9)
+                    -> per-candidate VLM visual features + voxel-geometry measurements (feature bundle)
+ExtentSummaryAgent  (feature_measurement.py, rev 2.9)
+                    -> descriptive, measurement-based extent / severity summary for the accepted candidate
+ClassifierAgent     -> LEGACY (staging_scheme="patel_3d" only): Patel 3D code; not used by the default path
+TreatmentPlannerAgent -> safe set + modifiers + constrained RL policy keyed off the extent summary (default)
+                       or the legacy Patel matrix, with contingencies
 ModeratorAgent      -> runs the debate rounds and writes the consensus
 
 Every agent appends `Evidence` to the shared blackboard; none can finalise a
@@ -26,8 +31,9 @@ from .criteria import (CRITERIA, HYPOTHESES, PRIOR, answer_questions, confidence
 from .clinical import ClinicalFindings, correlate
 from .llm_backend import LLMBackend, NullBackend
 from .visual_features import CandidateDescriptors, describe_candidates, render_candidate_tiles
-from ..decision_matrix import (ClinicalModifiers, END_STAGE_CODES, Treatment, end_stage_matrix,
-                               recommend_from_matrix)
+from .feature_measurement import bundle_feature_notes
+from ..decision_matrix import (ClinicalModifiers, END_STAGE_CODES, SCHEME_MEASUREMENT, Treatment, end_stage_matrix,
+                               recommend_from_matrix, recommend_from_measurements)
 from ..ecr_detection import CervicalResorptionDetector
 from ..patel_classifier import classify_patel
 from ..preprocess import preprocess_volume, crop_to_bbox
@@ -178,6 +184,45 @@ class LesionScreeningAgent(Agent):
                           f"conference" + ("" if descs else "; a negative screen does not exclude ECR"))
         return evs
 
+    def reconcile(self, bb: Blackboard) -> Optional[Evidence]:
+        """Rev 2.9: compare each candidate's screen disposition with the feature bundle (geometry + VLM reading).
+
+        The screen is never overruled: disagreements are posted as `screen_reconciliation` evidence for the skeptic
+        and the moderator, and a candidate is never removed here.
+        """
+        bundles = bb.arrays.get("feature_bundles", {})
+        if not bundles:
+            return None
+        rows = []
+        for cid, b in bundles.items():
+            bd = b.to_dict() if hasattr(b, "to_dict") else b
+            cand = bb.latest("candidate", refers_to=cid)
+            disp = (cand.content.get("screen_disposition") if cand else None) or "unknown"
+            vis = bd.get("visual", {})
+            ms = bd.get("measurements", {})
+            notes = []
+            comm = (ms.get("root_canal_communication") or {}).get("value")
+            if disp == "internal_component_for_differential" and vis.get("assessed") and vis.get("portal_of_entry_visible") == "yes":
+                notes.append("screen found no surface connection but the model reports a visible portal")
+            if disp not in ("internal_component_for_differential", "unknown") and vis.get("assessed") and vis.get("portal_of_entry_visible") == "no":
+                notes.append("screen found a surface connection but the model saw no portal of entry")
+            if vis.get("assessed") and vis.get("metal_beam_hardening") == "marked":
+                notes.append("model flags marked metal / beam-hardening streaks around the candidate")
+            if vis.get("assessed") and vis.get("burnout_artifact_suspected") == "yes":
+                notes.append("model suspects cervical burnout")
+            if comm is True and vis.get("assessed") and vis.get("pericanal_radiopaque_line") == "intact":
+                notes.append("geometry shows canal communication but the model reads the pericanal line as intact")
+            rows.append({"component_id": cid, "screen_disposition": disp, "vlm_status": bd.get("vlm", {}).get("status"),
+                         "unverified_vlm_values": bd.get("unverified_vlm_values", []),
+                         "vlm_geometry_disagreements": bd.get("vlm_geometry_disagreements", []), "notes": notes})
+        ev = Evidence(self.name, "screen_reconciliation", {"candidates": rows,
+                                                           "rule": "screen dispositions are never changed here; disagreements become challenges"},
+                      basis="measurement", caveats=["reconciliation_is_informational"])
+        bb.post(ev)
+        n = sum(len(r["notes"]) for r in rows)
+        bb.say(self.name, f"screen vs feature bundle: {n} disagreement note(s) across {len(rows)} candidate(s); dispositions unchanged")
+        return ev
+
 
 # --------------------------------------------------------------------------- #
 RADIOLOGIST_SYSTEM = (
@@ -214,6 +259,36 @@ RADIOLOGIST_SCHEMA = {
 
 LLM_WEIGHT_MAX = 0.5        # second opinion never outweighs the measured rule posterior
 LLM_WEIGHT_WEAK_GROUNDING = 0.2
+
+# rev 2.9: log-odds nudges from the model's *visual* feature reading (things geometry cannot see).  Each is small
+# and the total is capped so the feature bundle can colour, but never drive, the rule posterior.
+FEATURE_LOGODDS = {
+    ("portal_of_entry_visible", "yes"): {"ECR": +0.3},
+    ("pericanal_radiopaque_line", "intact"): {"ECR": +0.3, "internal_resorption": -0.3},
+    ("pericanal_radiopaque_line", "interrupted"): {"internal_resorption": +0.2},
+    ("fibro_osseous_appearance", "yes"): {"ECR": +0.3, "caries": -0.3},
+    ("border_definition", "smooth"): {"ECR": -0.3, "noncarious_cervical_lesion": +0.3},
+    ("relation_to_restoration_margin", "continuous_with_margin"): {"restoration_margin_or_burnout": +0.4, "ECR": -0.2},
+    ("burnout_artifact_suspected", "yes"): {"restoration_margin_or_burnout": +0.4, "ECR": -0.2},
+    ("metal_beam_hardening", "marked"): {"imaging_artifact": +0.4},
+    ("lesion_visible_in_image", "no"): {"ECR": -0.3, "imaging_artifact": +0.2},
+}
+FEATURE_LOGODDS_CAP = 0.6
+
+
+def feature_logodds(bundle_dict: Optional[Dict]) -> Dict[str, float]:
+    """Capped per-hypothesis log-odds shift from an *assessed, non-abstained* visual feature reading."""
+    if not bundle_dict:
+        return {}
+    vis = bundle_dict.get("visual") or {}
+    if not vis.get("assessed") or bundle_dict.get("vlm", {}).get("status") != "ok":
+        return {}
+    acc: Dict[str, float] = {}
+    for (k, v), shifts in FEATURE_LOGODDS.items():
+        if vis.get(k) == v:
+            for h, w in shifts.items():
+                acc[h] = acc.get(h, 0.0) + w
+    return {h: float(np.clip(w, -FEATURE_LOGODDS_CAP, FEATURE_LOGODDS_CAP)) for h, w in acc.items()}
 
 
 def _llm_posterior(llm_out: Optional[Dict]) -> Optional[Dict[str, float]]:
@@ -252,10 +327,17 @@ class RadiologistAgent(Agent):
         for ch in challenges or []:
             if ch.get("target") in (None, d.component_id):
                 penalty += {"major": 0.8, "moderate": 0.4, "minor": 0.15}.get(ch.get("severity"), 0.0)
+        # rev 2.9: feature bundle (geometry + model visual reading) for this candidate, if the agent ran
+        fb_ev = bb.latest("feature_bundle", refers_to=d.component_id)
+        bundle = fb_ev.content if fb_ev else None
+        f_shift = feature_logodds(bundle)
+        f_notes = bundle_feature_notes(bundle) if bundle else {"for": [], "against": [], "confounders": []}
         post = dict(rule_post)
-        if penalty:
+        if penalty or f_shift:
             logp = np.log(np.array([max(post[h], 1e-9) for h in HYPOTHESES]))
             logp[HYPOTHESES.index("ECR")] -= penalty
+            for h, w in f_shift.items():
+                logp[HYPOTHESES.index(h)] += w
             p = np.exp(logp - logp.max()); p /= p.sum()
             post = {h: round(float(x), 4) for h, x in zip(HYPOTHESES, p)}
         # optional model second opinion
@@ -263,7 +345,13 @@ class RadiologistAgent(Agent):
         user = json.dumps({"descriptors": d.to_dict(),
                            "diagnostic_questions": questions,
                            "criteria_fired": {c.name: v for c, v in zip(CRITERIA, truth)},
-                           "skeptic_challenges": challenges or []}, default=str)
+                           "skeptic_challenges": challenges or [],
+                           "feature_bundle": None if not bundle else {
+                               "visual": bundle.get("visual"),
+                               "measurements": {k: {kk: m.get(kk) for kk in ("value", "unit", "source", "verified", "confidence")}
+                                                for k, m in (bundle.get("measurements") or {}).items()},
+                               "unverified_vlm_values": bundle.get("unverified_vlm_values"),
+                               "vlm_geometry_disagreements": bundle.get("vlm_geometry_disagreements")}}, default=str)
         llm_out = self._llm(bb, RADIOLOGIST_SYSTEM, user, RADIOLOGIST_SCHEMA,
                             images=[bb.arrays.get("frames_png", {}).get(d.component_id) or bb.arrays.get("tiles", {}).get(d.component_id)]
                             if self.backend.supports_images and (bb.arrays.get("frames_png", {}).get(d.component_id)
@@ -323,6 +411,8 @@ class RadiologistAgent(Agent):
                        {k: llm_out.get(k) for k in ("key_findings_for", "key_findings_against", "uncertainties")},
                        "criteria_for_ecr": fired_for, "criteria_against_ecr": fired_against,
                        "criteria_not_assessable": not_assessable, "skeptic_penalty_logodds": round(penalty, 3),
+                       "feature_logodds": {h: round(w, 3) for h, w in f_shift.items()}, "feature_notes": f_notes,
+                       "feature_bundle_used": bool(bundle),
                        "weights_version": self.weights_version, "calibrated": False,
                        "band": confidence_band(combined["ECR"], capped), "band_capped_by_unverified_anatomy": capped},
                       confidence=combined["ECR"], basis="llm+rule" if (llm_post and llm_weight > 0) else "rule",
@@ -330,7 +420,8 @@ class RadiologistAgent(Agent):
                       caveats=["posterior_is_uncalibrated_expert_prior"] + (["landmarks_unverified"] if capped else []))
         bb.post(ev)
         bb.say(self.name, f"candidate {d.component_id}: leading {leading} (P(ECR)={combined['ECR']:.2f}, "
-                          f"{ev.content['band']}); for: {fired_for}; against: {fired_against}", rnd)
+                          f"{ev.content['band']}); for: {fired_for}; against: {fired_against}"
+                          + (f"; visual features for: {f_notes['for']}; against: {f_notes['against']}" if bundle and (f_notes["for"] or f_notes["against"]) else ""), rnd)
         return ev
 
     # -- learning from clinician-confirmed diagnoses --------------------------------
@@ -401,7 +492,30 @@ class SkepticAgent(Agent):
                 "distinction are less reliable, and filling streaks can mimic defects.", "moderate")
         if d.canal_wall_intact is False:
             add("Candidate reaches the canal proxy: deep caries, perforating ECR or internal resorption all possible.", "minor")
-        llm = self._llm(bb, SKEPTIC_SYSTEM, json.dumps({"descriptors": d.to_dict(), "radiologist": diff.content},
+        # rev 2.9: challenges from the feature bundle (unverified model numbers, model/geometry disagreement, confounders)
+        fb_ev = bb.latest("feature_bundle", refers_to=d.component_id)
+        bundle = fb_ev.content if fb_ev else None
+        if bundle:
+            if bundle.get("unverified_vlm_values"):
+                add("Model-reported values without geometric verification: " + ", ".join(bundle["unverified_vlm_values"])
+                    + "; treat as unmeasured.", "minor")
+            if bundle.get("vlm_geometry_disagreements"):
+                add("Model estimates disagree with voxel geometry for " + ", ".join(bundle["vlm_geometry_disagreements"])
+                    + "; either the mask or the model reading is wrong.", "moderate")
+            notes = bundle_feature_notes(bundle)
+            for c in notes["confounders"]:
+                add(f"Model flags a confounder on the frame: {c}.", "moderate" if ("marked" in c or c == "burnout") else "minor")
+            if bundle.get("vlm", {}).get("status") == "abstained":
+                add("Vision model samples disagreed on the visual features (abstained); the visual reading was not used.", "minor")
+            recon = bb.latest("screen_reconciliation")
+            if recon:
+                for row in recon.content.get("candidates", []):
+                    if row.get("component_id") == d.component_id:
+                        for n in row.get("notes", []):
+                            if "portal" in n:
+                                add(f"Screen / model disagreement: {n}.", "moderate")
+        llm = self._llm(bb, SKEPTIC_SYSTEM, json.dumps({"descriptors": d.to_dict(), "radiologist": diff.content,
+                                                        "feature_bundle_visual": (bundle or {}).get("visual")},
                                                        default=str), SKEPTIC_SCHEMA)
         if llm and isinstance(llm.get("challenges"), list):
             for it in llm["challenges"][:5]:
@@ -418,6 +532,8 @@ class SkepticAgent(Agent):
 
 # --------------------------------------------------------------------------- #
 class ClassifierAgent(Agent):
+    """LEGACY (rev <= 2.8).  Only runs when `CaseConference(staging_scheme="patel_3d")` is requested explicitly.
+    The default path uses `ExtentSummaryAgent` (measurement-based, no staging code)."""
     name = "patel_classifier"
 
     def run(self, bb: Blackboard, cid: int, spacing) -> Evidence:
@@ -452,10 +568,32 @@ class TreatmentPlannerAgent(Agent):
 
     def run(self, bb: Blackboard, mods: ClinicalModifiers, policy: ConstrainedBanditPolicy,
             tooth_type: str = "unknown", age_years: Optional[float] = None) -> Evidence:
-        patel = bb.arrays["patel"]
-        rec = recommend_from_matrix(patel.code, mods, portal_angle_deg=patel.portal_angle_deg,
-                                    calcified_fraction=patel.calcified_fraction)
-        ctx = ClinicalContext(patel=patel, mods=mods, tooth_type=tooth_type, age_years=age_years)
+        """Safe set + ranking.  Default (rev 2.9): keyed off the measurement-based extent summary; the legacy
+        Patel matrix is used only when the conference ran the legacy classifier."""
+        summary = bb.arrays.get("extent_summary")
+        if summary is not None:
+            def recommend(m):
+                return recommend_from_measurements(summary, m)
+            ctx = ClinicalContext(extent=summary, mods=mods, tooth_type=tooth_type, age_years=age_years)
+            refers_to = bb.latest("extent_summary").refers_to
+            key_label = f"measurement cell {summary.cell_key}"
+            end_stage = False
+            caveats = ["plan_conditional_on_unconfirmed_ecr_and_unreviewed_measurements",
+                       "safe_set_keyed_by_measurement_descriptors_not_a_staging_code"]
+            escalation = None
+        else:   # legacy
+            patel = bb.arrays["patel"]
+
+            def recommend(m):
+                return recommend_from_matrix(patel.code, m, portal_angle_deg=patel.portal_angle_deg,
+                                             calcified_fraction=patel.calcified_fraction)
+            ctx = ClinicalContext(patel=patel, mods=mods, tooth_type=tooth_type, age_years=age_years)
+            refers_to = bb.latest("patel").refers_to
+            key_label = f"Patel {patel.code}"
+            end_stage = patel.code in END_STAGE_CODES
+            caveats = ["plan_conditional_on_unconfirmed_ecr_and_unreviewed_patel_components"]
+            escalation = end_stage_matrix() if end_stage else None
+        rec = recommend(mods)
         decision = policy.decide(ctx, rec)
         # contingency branches for the clinical inputs that are still unknown
         contingencies = []
@@ -464,30 +602,54 @@ class TreatmentPlannerAgent(Agent):
                 continue
             branch = {}
             for val in (True, False):
-                m2 = ClinicalModifiers(**{**asdict(mods), f: val})
-                r2 = recommend_from_matrix(patel.code, m2, portal_angle_deg=patel.portal_angle_deg,
-                                           calcified_fraction=patel.calcified_fraction)
+                r2 = recommend(ClinicalModifiers(**{**asdict(mods), f: val}))
                 branch[str(val)] = r2.primary.value
             if branch["True"] != branch["False"] or branch["True"] != rec.primary.value:
                 contingencies.append({"input": f, "if_true": branch["True"], "if_false": branch["False"]})
         follow_up = ("Clinical and radiographic review after treatment; repeat CBCT only when it would change "
                      "management (ESE 2023 position statement). Periodic review is itself a matrix option for "
                      "non-progressive lesions in asymptomatic teeth.")
-        content = {"patel_code": patel.code, "rule_recommendation": rec.to_dict(), "policy_decision": decision.to_dict(),
-                   "end_stage": patel.code in END_STAGE_CODES,
-                   "end_stage_matrix": end_stage_matrix() if patel.code in END_STAGE_CODES else None,
+        content = {"cell_key": rec.cell_key, "cell_scheme": rec.cell_scheme,
+                   "rule_recommendation": rec.to_dict(), "policy_decision": decision.to_dict(),
+                   "end_stage": end_stage, "end_stage_matrix": escalation,
                    "contingencies": contingencies, "follow_up": follow_up,
                    "irreversible_options_in_safe_set": [t.value for t in rec.safe_set if t.irreversible],
                    "policy_feedback_cases": policy.n_cases}
-        caveats = ["plan_conditional_on_unconfirmed_ecr_and_unreviewed_patel_components"]
+        if summary is not None:
+            content["extent_summary_ref"] = {"extent_descriptor": summary.extent_descriptor, "pulp_relationship": summary.pulp_relationship,
+                                             "access_descriptor": summary.access_descriptor, "near_boundary": list(summary.near_boundary)}
+            content["escalation_considerations"] = _escalation_considerations(summary)
+        else:
+            content["patel_code"] = rec.cell_key
         if rec.missing_inputs:
             caveats.append("missing_clinical_inputs:" + ",".join(rec.missing_inputs))
-        ev = Evidence(self.name, "plan", content, basis="rule+policy", refers_to=bb.latest("patel").refers_to,
-                      caveats=caveats)
+        ev = Evidence(self.name, "plan", content, basis="rule+policy", refers_to=refers_to, caveats=caveats)
         bb.post(ev)
-        bb.say(self.name, f"Patel {patel.code}: primary {rec.primary.value}; policy ranking "
+        bb.say(self.name, f"{key_label}: primary {rec.primary.value}; policy ranking "
                           f"{' > '.join(decision.to_dict()['ranking'])}; missing inputs {rec.missing_inputs}")
         return ev
+
+
+def _escalation_considerations(summary) -> List[str]:
+    """Measurement-indexed replacement for the Patel end-stage table: plain-language considerations."""
+    out = []
+    if summary.extent_descriptor == "extensive":
+        out.append("Extensive measured dentine loss: restorability, fracture risk and the patient's strategic value of the tooth decide "
+                   "between repair, replantation, decoronation (growing patients) and extraction.")
+    if summary.pulp_relationship == "canal_communication":
+        out.append("Canal communication: root canal treatment is part of any repair; persistent intracanal bleeding after two "
+                   "calcium-hydroxide dressings argues against internal repair (Talpos-Niculescu 2025).")
+    if summary.access_descriptor == "deep_subcrestal_portal":
+        out.append("Portal more than 3 mm below the bone crest: external access would sacrifice supporting bone; internal approach or "
+                   "intentional replantation are the usual alternatives (Patel 2018 part 2 management principles).")
+    if summary.access_descriptor == "no_surface_portal":
+        out.append("No external surface portal measured: reconsider internal resorption or a closed cavity before lesion-directed treatment.")
+    if summary.repair_phase_suspected:
+        out.append("Radiopaque inclusions suggest a reparative phase; in an asymptomatic tooth periodic review is reasonable before "
+                   "irreversible treatment.")
+    if summary.restorability_concern:
+        out.append("Dentine loss above 30% of the root dentine in the crop: confirm restorability (ferrule, remaining wall thickness) clinically.")
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -498,14 +660,40 @@ class ClinicalCorrelationAgent(Agent):
     def run(self, bb: Blackboard, cid: int, posterior: Dict[str, float], findings: Optional[ClinicalFindings]) -> Evidence:
         findings = findings or ClinicalFindings()
         adjusted, rep = correlate(posterior, findings)
+        # rev 2.9: cross-check entered findings against the measured feature bundle (text only; no posterior change)
+        fb_ev = bb.latest("feature_bundle", refers_to=cid)
+        cross = _clinical_feature_crosscheck(fb_ev.content if fb_ev else None, findings)
         ev = Evidence(self.name, "clinical_correlation",
                       {"findings": findings.to_dict(), "imaging_posterior": posterior, "adjusted_posterior": adjusted,
-                       **rep}, basis="clinician" if findings.to_dict() else "rule", refers_to=cid,
+                       **rep, "feature_crosscheck": cross}, basis="clinician" if findings.to_dict() else "rule", refers_to=cid,
                       caveats=[] if findings.to_dict() else ["no_clinical_findings_entered"])
         bb.post(ev)
         bb.say(self.name, f"candidate {cid}: clinical picture {rep['verdict']} ({rep['n_findings']} findings); "
-                          f"P(ECR) {posterior['ECR']:.2f} -> {adjusted['ECR']:.2f}")
+                          f"P(ECR) {posterior['ECR']:.2f} -> {adjusted['ECR']:.2f}"
+                          + (f"; feature cross-check: {'; '.join(cross)}" if cross else ""))
         return ev
+
+
+def _clinical_feature_crosscheck(bundle: Optional[Dict], findings: ClinicalFindings) -> List[str]:
+    """Plain-language consistency notes between measured features and clinician-entered findings."""
+    if not bundle:
+        return []
+    notes: List[str] = []
+    ms = bundle.get("measurements", {}) or {}
+    vis = bundle.get("visual", {}) or {}
+    comm = (ms.get("root_canal_communication") or {})
+    if comm.get("verified") and comm.get("value") is True and findings.pulp_sensibility_normal is True:
+        notes.append("measured canal communication with a normal pulp response: check the canal mask (root filling / proxy) or expect late-stage vitality loss")
+    if comm.get("verified") and comm.get("value") is False and findings.symptomatic is True:
+        notes.append("symptoms with a measured dentine barrier to the canal: consider another source of symptoms")
+    portal = (ms.get("coronal_limit_from_crest_mm") or {})
+    if portal.get("verified") and portal.get("value") is not None and portal["value"] > 3.0 and findings.cervical_defect_hard_irregular is True:
+        notes.append("a hard irregular defect was probed but the measured portal lies > 3 mm below the crest: probing site and candidate may differ")
+    if vis.get("assessed") and vis.get("relation_to_restoration_margin") == "continuous_with_margin" and findings.restoration_at_defect is False:
+        notes.append("model sees the defect continuous with a restoration margin but no restoration was recorded at the defect")
+    if vis.get("assessed") and vis.get("portal_of_entry_visible") == "yes" and findings.cervical_defect_hard_irregular is True:
+        notes.append("visible portal of entry and a hard irregular cervical defect on probing are mutually consistent")
+    return notes
 
 
 # --------------------------------------------------------------------------- #
@@ -600,10 +788,10 @@ class CoverageAgent(Agent):
             missing.append({"item": item, "why": why, "how_to_resolve": how})
         flags = set((screen.content.get("landmarks", {}) or {}).get("flags", [])) if screen else set()
         if not screen or (screen.content.get("landmarks", {}) or {}).get("source") != "reviewed_points":
-            miss("CEJ and apex landmarks", "cervical band and Patel height are estimated, not measured",
+            miss("CEJ and apex landmarks", "cervical band and the CEJ-referenced extent measurements are estimated, not measured",
                  "mark CEJ_ZYX / APEX_ZYX and re-run")
         if anat and "canal_is_automatic_proxy" in anat.caveats:
-            miss("canal delineation", "canal proximity (Patel d) uses an automatic proxy", "import an expert canal mask")
+            miss("canal delineation", "canal distance / communication measurements use an automatic proxy", "import an expert canal mask")
         if anat and "root_filling_present_canal_is_filling_not_pulp" in anat.caveats:
             miss("pre-treatment pulp anatomy", "root filling present: internal-vs-external distinction less reliable",
                  "compare with pre-treatment imaging if available")

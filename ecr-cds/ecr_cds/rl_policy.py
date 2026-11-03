@@ -45,7 +45,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .decision_matrix import Treatment, Recommendation, ClinicalModifiers
+from .decision_matrix import SCHEME_PATEL, Treatment, Recommendation, ClinicalModifiers
 from .patel_classifier import PatelParameters
 
 ACTIONS: List[Treatment] = list(Treatment)
@@ -68,41 +68,67 @@ _TIER = {
 # --------------------------------------------------------------------------- #
 @dataclass
 class ClinicalContext:
-    """Feature vector for the contextual model (all scaled roughly to [0,1])."""
-    patel: PatelParameters
-    mods: ClinicalModifiers
+    """Feature vector for the contextual model (all scaled roughly to [0,1]).
+
+    Exactly one of `patel` (legacy Patel-indexed scheme) or `extent` (rev 2.9 measurement-based `ExtentSummary`)
+    is given.  The eight lesion slots of the vector are filled from measured quantities in both cases; the two
+    schemes use different cell keys so their tabular priors never mix.  Keep separate policy files per scheme
+    (the linear part is shared by construction).
+    """
+    patel: Optional[PatelParameters] = None
+    mods: ClinicalModifiers = field(default_factory=ClinicalModifiers)
     tooth_type: str = "unknown"      # 'anterior' | 'premolar' | 'molar'
     age_years: Optional[float] = None
+    extent: Optional[object] = None  # ecr_cds.extent_summary.ExtentSummary
+
+    def __post_init__(self):
+        if (self.patel is None) == (self.extent is None):
+            raise ValueError("ClinicalContext needs exactly one of patel= or extent=")
+
+    @property
+    def scheme(self) -> str:
+        return SCHEME_PATEL if self.patel is not None else getattr(self.extent, "scheme", "measurement_v1")
+
+    @property
+    def borderline(self) -> bool:
+        return bool(self.patel.borderline if self.patel is not None else self.extent.borderline)
+
+    def _lesion_slots(self) -> List[float]:
+        if self.patel is not None:
+            p = self.patel
+            return [(p.height - 1) / 3.0, "ABCD".index(p.spread) / 3.0, 1.0 if p.proximity == "p" else 0.0,
+                    min(p.lesion_volume_mm3 / 200.0, 1.0), min(p.min_canal_distance_mm / 2.0, 1.0),
+                    min(p.spread_deg / 360.0, 1.0), p.calcified_fraction, 1.0 if p.borderline else 0.0]
+        e = self.extent
+        ext_i = {"limited": 0.0, "moderate": 0.5, "extensive": 1.0}.get(e.extent_descriptor, 0.5)
+        pulp_i = {"dentine_barrier_preserved": 0.0, "thin_dentine_barrier": 0.5, "canal_communication": 1.0}.get(e.pulp_relationship, 0.5)
+        access_i = {"supracrestal_portal": 0.0, "shallow_subcrestal_portal": 0.33, "deep_subcrestal_portal": 1.0,
+                    "no_surface_portal": 0.66}.get(e.access_descriptor, 0.5)
+        return [min((e.long_axis_extent_mm or 0.0) / 15.0, 1.0), ext_i, pulp_i,
+                min((e.lesion_volume_mm3 or 0.0) / 200.0, 1.0),
+                0.5 if e.min_canal_distance_mm is None else min(e.min_canal_distance_mm / 2.0, 1.0),
+                min((e.circumferential_extent_deg or 0.0) / 360.0, 1.0), access_i, 1.0 if e.borderline else 0.0]
 
     def vector(self) -> np.ndarray:
-        p, m = self.patel, self.mods
+        m = self.mods
 
         def b(x: Optional[bool]) -> float:
             return 0.5 if x is None else float(x)
 
-        return np.array([
-            1.0,
-            (p.height - 1) / 3.0,
-            "ABCD".index(p.spread) / 3.0,
-            1.0 if p.proximity == "p" else 0.0,
-            min(p.lesion_volume_mm3 / 200.0, 1.0),
-            min(p.min_canal_distance_mm / 2.0, 1.0),
-            min(p.spread_deg / 360.0, 1.0),
-            p.calcified_fraction,
-            1.0 if p.borderline else 0.0,
-            b(m.symptomatic), b(m.pulp_vital), b(m.restorable),
-            b(m.perio_support_adequate), b(m.multirooted),
-            b(m.surgically_accessible), b(m.persistent_bleeding),
-            b(m.growing_patient), b(m.aesthetic_zone),
-            1.0 if self.tooth_type == "anterior" else 0.0,
-            1.0 if self.tooth_type == "molar" else 0.0,
-            0.5 if self.age_years is None else min(self.age_years / 80.0, 1.0),
-        ], dtype=float)
+        return np.array([1.0, *self._lesion_slots(),
+                         b(m.symptomatic), b(m.pulp_vital), b(m.restorable),
+                         b(m.perio_support_adequate), b(m.multirooted),
+                         b(m.surgically_accessible), b(m.persistent_bleeding),
+                         b(m.growing_patient), b(m.aesthetic_zone),
+                         1.0 if self.tooth_type == "anterior" else 0.0,
+                         1.0 if self.tooth_type == "molar" else 0.0,
+                         0.5 if self.age_years is None else min(self.age_years / 80.0, 1.0),
+                         ], dtype=float)
 
 
 @dataclass
 class Decision:
-    patel_code: str
+    cell_key: str                        # Patel code (legacy) or measurement descriptor key
     chosen: Treatment
     ranking: List[Treatment]
     propensities: Dict[str, float]       # P(action) under the policy over the safe set
@@ -110,10 +136,16 @@ class Decision:
     requires_confirmation: bool
     reinspect_requested: bool
     rationale: List[str]
+    cell_scheme: str = SCHEME_PATEL
+
+    @property
+    def patel_code(self) -> Optional[str]:
+        return self.cell_key if self.cell_scheme == SCHEME_PATEL else None
 
     def to_dict(self) -> Dict:
-        return {
-            "patel_code": self.patel_code,
+        d = {
+            "cell_key": self.cell_key,
+            "cell_scheme": self.cell_scheme,
             "chosen": self.chosen.value,
             "ranking": [r.value for r in self.ranking],
             "propensities": self.propensities,
@@ -122,6 +154,9 @@ class Decision:
             "reinspect_requested": self.reinspect_requested,
             "rationale": self.rationale,
         }
+        if self.cell_scheme == SCHEME_PATEL:
+            d["patel_code"] = self.cell_key
+        return d
 
 
 @dataclass
@@ -205,7 +240,8 @@ def build_reward(decision: Decision, fb: Feedback, borderline: bool,
 
 # --------------------------------------------------------------------------- #
 class ConstrainedBanditPolicy:
-    """Thompson-sampling bandit with a tabular prior per Patel cell and a
+    """Thompson-sampling bandit with a tabular prior per decision cell (Patel code in the legacy scheme,
+    measurement descriptor key in rev 2.9) and a
     Bayesian linear model per action for generalisation across cells.
 
     score(a | x, cell) = w_tab * Beta_sample(cell, a) + (1 - w_tab) * θ_a·x
@@ -238,7 +274,7 @@ class ConstrainedBanditPolicy:
     def _ensure_prior(self, rec: Recommendation):
         n = len(rec.safe_set)
         for rank, a in enumerate(rec.safe_set):
-            key = (rec.patel_code, a.value)
+            key = (rec.cell_key, a.value)
             if key not in self.alpha:
                 # primary: mean ≈ prognosis prior; alternatives decay with rank
                 mean = rec.prognosis_prior * (0.85 ** rank)
@@ -254,7 +290,7 @@ class ConstrainedBanditPolicy:
         safe = rec.safe_set
         scores = np.zeros((n_samples, len(safe)))
         for j, a in enumerate(safe):
-            key = (rec.patel_code, a.value)
+            key = (rec.cell_key, a.value)
             tab = self.rng.beta(self.alpha[key], self.beta[key], size=n_samples)
             A_inv = np.linalg.inv(self.A[a])
             theta_mean = A_inv @ self.b[a]
@@ -267,11 +303,11 @@ class ConstrainedBanditPolicy:
         order = np.argsort(-props)
         ranking = [safe[i] for i in order]
         chosen = ranking[0]
-        reinspect = bool(ctx.patel.borderline)
+        reinspect = bool(ctx.borderline)
         rationale = list(rec.rationale)
         # No feedback yet for this code (all posteriors at their priors): keep the guideline
         # order; Thompson noise alone must not re-rank treatments.
-        n_obs = sum(self.alpha[(rec.patel_code, a.value)] + self.beta[(rec.patel_code, a.value)] - self.prior_strength for a in safe)
+        n_obs = sum(self.alpha[(rec.cell_key, a.value)] + self.beta[(rec.cell_key, a.value)] - self.prior_strength for a in safe)
         if n_obs < 1.0:
             ranking = list(safe); chosen = rec.primary
             props = np.array([1.0 if a == rec.primary else 0.0 for a in safe]); order = np.arange(len(safe))
@@ -280,10 +316,11 @@ class ConstrainedBanditPolicy:
             rationale.append(f"RL re-ranking: learned evidence favours {chosen.value} over "
                              f"guideline default {rec.primary.value} (P={props[order[0]]:.2f}).")
         if reinspect:
-            rationale.append("Borderline Patel parameters -> reinspection (re-slice along root axis, "
-                             "re-threshold canal proximity) requested before finalising.")
+            rationale.append(("Borderline Patel parameters" if ctx.patel is not None else
+                              "Measured descriptor(s) near a band edge") +
+                             " -> reinspection (re-slice along root axis, re-threshold canal proximity) requested before finalising.")
         return Decision(
-            patel_code=rec.patel_code, chosen=chosen, ranking=ranking,
+            cell_key=rec.cell_key, cell_scheme=rec.cell_scheme, chosen=chosen, ranking=ranking,
             propensities={safe[i].value: float(props[i]) for i in range(len(safe))},
             safe_set=safe, requires_confirmation=bool(chosen.irreversible or rec.requires_confirmation),
             reinspect_requested=reinspect, rationale=rationale,
@@ -301,7 +338,7 @@ class ConstrainedBanditPolicy:
         self.seen_events.add(fb.event_id)
         x = ctx.vector()
         r01 = float(np.clip((reward + 1.0) / 2.4, 0.0, 1.0))  # map [-1, 1.4] -> [0,1]
-        key = (decision.patel_code, decision.chosen.value)
+        key = (decision.cell_key, decision.chosen.value)
         self.alpha[key] = self.alpha.get(key, 1.0) + r01
         self.beta[key] = self.beta.get(key, 1.0) + (1 - r01)
         a = decision.chosen
@@ -309,11 +346,11 @@ class ConstrainedBanditPolicy:
         self.b[a] += (r01 - 0.5) * x
         # Also credit the clinician's choice when it differed (supervised signal)
         if fb.clinician_choice != decision.chosen and fb.clinician_choice in decision.safe_set:
-            k2 = (decision.patel_code, fb.clinician_choice.value)
+            k2 = (decision.cell_key, fb.clinician_choice.value)
             self.alpha[k2] = self.alpha.get(k2, 1.0) + 0.5
         self.log.append({
             "case_id": fb.case_id, "event_id": fb.event_id, "event_type": fb.event_type,
-            "code": decision.patel_code, "x": x.tolist(), "chosen": a.value,
+            "code": decision.cell_key, "scheme": decision.cell_scheme, "x": x.tolist(), "chosen": a.value,
             "propensity": decision.propensities[a.value],
             "clinician": fb.clinician_choice.value, "reward": reward,
             "components": components, "follow_up_months": fb.follow_up_months,

@@ -7,14 +7,17 @@ Output contract
   status                  suggested_ecr_with_plan | ecr_possible_conditional_plan | no_ecr_suggested |
                           no_candidates | insufficient_evidence
   suggested_diagnosis     leading hypothesis, uncalibrated posterior, band, differential, evidence for/against
-  suggested_patel         Patel 3D code measured on the accepted candidate (None unless ECR suggested/possible)
-  suggested_plan          matrix + modifiers + constrained policy, contingencies for missing inputs
+  suggested_extent        rev 2.9 (default): descriptive, measurement-based extent / severity summary of the accepted
+                          candidate (None unless ECR suggested/possible).  No staging code.
+  suggested_patel         LEGACY, only when CaseConference(staging_scheme="patel_3d"): Patel 3D code
+  suggested_plan          safe set + modifiers + constrained policy, contingencies for missing inputs
+  feature_bundles         per-candidate VLM visual features + voxel-geometry measurements with provenance
   clinician_actions_required
   conference              full blackboard (evidence trail + transcript)
 
 Everything is a *suggestion*.  `requires_confirmation` is always True.  The
-treating clinician confirms the diagnosis, reviews the Patel components in the
-notebook's Section 5 and supplies the clinical inputs before any plan is acted on.
+treating clinician confirms the diagnosis, reviews the measured extent and
+supplies the clinical inputs before any plan is acted on.
 """
 from __future__ import annotations
 
@@ -30,6 +33,7 @@ from .llm_backend import LLMBackend, NullBackend
 from .roles import (ContextAgent, CoverageAgent, KnowledgeAgent, VerifierAgent)
 from .roles import (AnatomyAgent, ClassifierAgent, ClinicalCorrelationAgent, ImagingQAAgent, LesionScreeningAgent,
                     RadiologistAgent, SkepticAgent, TreatmentPlannerAgent)
+from .feature_measurement import ExtentSummaryAgent, FeatureMeasurementAgent
 from .clinical import ClinicalFindings
 from ..decision_matrix import ClinicalModifiers
 from ..pipeline import _quality_checks
@@ -38,6 +42,8 @@ from ..perception.tools import PerceptionToolkit
 from dataclasses import asdict
 
 EVIDENCE_LEVEL = "multi_agent_suggestion_uncalibrated"
+STAGING_MEASUREMENT = "measurement"   # rev 2.9 default: descriptive extent summary, no staging code
+STAGING_PATEL_LEGACY = "patel_3d"     # legacy opt-in for reproducing rev <= 2.8 outputs
 
 # When the conference does not favour ECR it still suggests how to resolve the leading alternative.
 # These are generic clinical work-up steps, not treatment prescriptions.
@@ -62,11 +68,22 @@ NON_ECR_NEXT_STEPS = {
 class CaseConference:
     def __init__(self, backend: Optional[LLMBackend] = None, max_rounds: int = 2,
                  suggest_threshold: float = 0.5, possible_threshold: float = 0.35,
-                 radiologist_weights: Optional[np.ndarray] = None, radiologist_weights_version: str = "expert_prior_v1"):
+                 radiologist_weights: Optional[np.ndarray] = None, radiologist_weights_version: str = "expert_prior_v1",
+                 staging_scheme: str = STAGING_MEASUREMENT, vlm_features: bool = True,
+                 feature_backend: Optional[LLMBackend] = None):
+        """
+        staging_scheme:  "measurement" (default, rev 2.9) - descriptive extent summary + measurement-indexed safe set;
+                         "patel_3d" - legacy Patel classifier + 32-cell matrix (reproduces rev <= 2.8 reports only).
+        vlm_features:    query the vision model for visual features (geometry measurements are always computed).
+        feature_backend: backend for the feature-measurement agent (defaults to `backend`).
+        """
+        if staging_scheme not in (STAGING_MEASUREMENT, STAGING_PATEL_LEGACY):
+            raise ValueError(f"staging_scheme must be '{STAGING_MEASUREMENT}' or '{STAGING_PATEL_LEGACY}'")
         self.backend = backend or NullBackend()
         self.max_rounds = max(1, int(max_rounds))
         self.suggest_threshold = suggest_threshold
         self.possible_threshold = possible_threshold
+        self.staging_scheme = staging_scheme
         self.qa = ImagingQAAgent(self.backend)
         self.anatomy = AnatomyAgent(self.backend)
         self.screen = LesionScreeningAgent(self.backend)
@@ -75,6 +92,10 @@ class CaseConference:
         self.classifier = ClassifierAgent(self.backend)
         self.planner = TreatmentPlannerAgent(self.backend)
         self.clinical = ClinicalCorrelationAgent(self.backend)
+        # rev 2.9: VLM feature measurement (geometry always; model only when vlm_features) + extent summary
+        self.features = FeatureMeasurementAgent((feature_backend or self.backend) if vlm_features else NullBackend())
+        self.extent = ExtentSummaryAgent()
+        self.vlm_features = bool(vlm_features)
         # rev 2.7 agent-layer roles: context intake, critic re-inspection, coverage tracking, knowledge retrieval
         self.context_agent = ContextAgent(self.backend)
         self.verifier = VerifierAgent(self.backend)
@@ -91,8 +112,11 @@ class CaseConference:
             context=None, toolkit: Optional[PerceptionToolkit] = None, verify: bool = True,
             clahe_display: bool = False, verify_mode: str = "smooth", sharpen_display: bool = False,
             counterfactual_check: bool = False, examined_teeth: Optional[List[int]] = None,
-            focus_teeth: Optional[List[int]] = None) -> Dict:
+            focus_teeth: Optional[List[int]] = None, buccal_direction=None) -> Dict:
         """Run the conference on one tooth.
+
+        buccal_direction: optional patient buccal direction (z,y,x in voxel axes) so the feature bundle can label its
+                 in-plane extents mesio-distal / bucco-lingual; without it the labels are a radial proxy and flagged.
 
         context: optional ToothContext (Diagnocat findings + chart) -> prior shifts, modifier / finding hints.
         toolkit: PerceptionToolkit whose call log is attached to the report (one per patient run).
@@ -155,6 +179,14 @@ class CaseConference:
                 self.verifier.run(bb, toolkit, d, volume.spacing, source_id=case_id, full_slice=full_slice, clahe=clahe_display,
                                   mode=verify_mode, sharpen=sharpen_display,
                                   counterfactual=counterfactual_check and getattr(self.backend, "supports_images", False))
+        # ---- rev 2.9: feature measurement (voxel geometry + VLM visual reading) per candidate -------------------
+        self.features.buccal_direction = buccal_direction
+        for cid, d in descs.items():
+            try:
+                self.features.run(bb, d, volume.spacing, source_id=case_id)
+            except Exception as e:  # measurement must never break the conference
+                bb.say(self.features.name, f"candidate {cid}: feature measurement failed ({type(e).__name__}: {str(e)[:120]})")
+        self.screen.reconcile(bb)
         # ---- debate rounds per candidate ---------------------------------
         finals: Dict[int, Evidence] = {}
         for cid, d in descs.items():
@@ -190,14 +222,22 @@ class CaseConference:
         consensus["verification"] = {cid: {k: v for k, v in e.content.items() if k != "evidence_frame"}
                                      for cid, e in ((e.refers_to, e) for e in bb.query(kind="verification"))}
         consensus["evidence_frames"] = {e.refers_to: e.content.get("evidence_frame") for e in bb.query(kind="verification")}
+        consensus["feature_bundles"] = {e.refers_to: e.content for e in bb.query(kind="feature_bundle")}
+        consensus["screen_reconciliation"] = (bb.latest("screen_reconciliation").content if bb.latest("screen_reconciliation") else None)
         consensus["tool_log"] = toolkit.log_dicts()
-        consensus["architecture"] = {"perception_layer": "ecr_cds.perception (segment, propose, delineate, measure, reformat, re-verify)",
-                                     "agent_layer": "ecr_cds.agents (context, QA, anatomy, screening, verifier, radiologist, skeptic, "
-                                                    "clinical correlation, classifier, planner, coverage, knowledge, moderator)",
-                                     "rule": "knowledge and context interpret established findings; they never create findings",
+        consensus["architecture"] = {"perception_layer": "ecr_cds.perception (segment, propose, delineate, measure, reformat, re-verify, "
+                                                         "VLM feature measurement grounded in voxel geometry)",
+                                     "agent_layer": "ecr_cds.agents (context, QA, anatomy, screening, verifier, feature measurement, radiologist, "
+                                                    "skeptic, clinical correlation, "
+                                                    + ("extent summary" if self.staging_scheme == STAGING_MEASUREMENT else "Patel classifier [legacy]")
+                                                    + ", planner, coverage, knowledge, moderator)",
+                                     "rule": "knowledge and context interpret established findings; they never create findings; "
+                                             "model visual readings never override voxel measurements",
                                      "settings": {"verify": bool(verify), "verify_mode": verify_mode, "clahe_display": bool(clahe_display),
                                                   "sharpen_display": bool(sharpen_display), "counterfactual_check": bool(counterfactual_check),
-                                                  "backend": getattr(self.backend, "name", "none")}}
+                                                  "backend": getattr(self.backend, "name", "none"),
+                                                  "staging_scheme": self.staging_scheme, "vlm_features": self.vlm_features,
+                                                  "feature_backend": getattr(self.features.backend, "name", "none")}}
         consensus.update(case_id=case_id, qa=qa, acquisition=volume.metadata,
                          roi_bbox_zyx=[[int(s.start), int(s.stop)] for s in crop],
                          evidence_level=EVIDENCE_LEVEL, requires_confirmation=True, clinical_validation=False,
@@ -221,10 +261,13 @@ class CaseConference:
     # ------------------------------------------------------------------ #
     def _moderate(self, bb, finals, descs, spacing, mods, policy, tooth_type, age_years, clin=None) -> Dict:
         clin = clin or {}
+        legacy = self.staging_scheme == STAGING_PATEL_LEGACY
         actions = ["Review the automatic tooth / canal masks and the candidate tiles.",
-                   "Mark the CEJ and apex (CEJ_ZYX / APEX_ZYX) so the cervical band and Patel height are measured, not assumed.",
+                   "Mark the CEJ and apex (CEJ_ZYX / APEX_ZYX) so the cervical band and the CEJ-referenced extents are measured, not assumed.",
                    "Confirm or reject the suggested diagnosis clinically (probing, bleeding, pulp tests, history).",
-                   "Enter reviewed Patel components and clinical inputs in Section 5 before using any plan."]
+                   ("Enter reviewed Patel components and clinical inputs in Section 5 before using any plan." if legacy else
+                    "Review the measured extent summary (and any model values flagged as unverified) and enter the clinical inputs before using any plan.")]
+        stage_key = "suggested_patel" if legacy else "suggested_extent"
         cand_rows = []
         for cid, ev in finals.items():
             d = descs[cid]
@@ -245,7 +288,7 @@ class CaseConference:
         if not cand_rows:
             bb.say("moderator", "No candidate reached the conference; this is not an exclusion of ECR.")
             return {"status": "no_candidates", "candidates": [], "suggested_diagnosis": None,
-                    "suggested_patel": None, "suggested_plan": None, "clinician_actions_required": actions[:3]}
+                    stage_key: None, "suggested_plan": None, "clinician_actions_required": actions[:3]}
         best = max(cand_rows, key=lambda r: r["p_ecr"])
         p = best["p_ecr"]
         leading = best["leading"]
@@ -256,7 +299,7 @@ class CaseConference:
               "supporting_criteria": best["criteria_for_ecr"], "opposing_criteria": best["criteria_against_ecr"],
               "unresolved_challenges": best["challenges"], "weights_version": self.radiologist.weights_version,
               "basis": finals[best["component_id"]].basis}
-        suggested_patel, plan = None, None
+        suggested_stage, plan = None, None
         if leading == "ECR" and p >= self.suggest_threshold:
             status = "suggested_ecr_with_plan"
             dx["statement"] = (f"Appearance most consistent with external cervical resorption (uncalibrated P={p:.2f}, "
@@ -272,18 +315,38 @@ class CaseConference:
                                f"for any candidate (max P(ECR)={p:.2f}). This does not exclude ECR.")
             dx["suggested_next_steps"] = NON_ECR_NEXT_STEPS.get(leading, [])
         if status in ("suggested_ecr_with_plan", "ecr_possible_conditional_plan"):
-            pe = self.classifier.run(bb, best["component_id"], spacing)
-            suggested_patel = pe.content
-            pl = self.planner.run(bb, mods, policy, tooth_type, age_years)
-            plan = pl.content
-            plan["conditional_on"] = ("clinical confirmation of ECR and clinician-reviewed Patel components"
-                                      if status == "ecr_possible_conditional_plan" else
-                                      "clinician-reviewed Patel components and clinical inputs")
-            if plan["irreversible_options_in_safe_set"]:
-                actions.append("Irreversible options are in the safe set: explicit confirmation required before any is chosen.")
+            if legacy:
+                pe = self.classifier.run(bb, best["component_id"], spacing)
+                reviewed = "clinician-reviewed Patel components"
+            else:
+                if best["component_id"] not in bb.arrays.get("feature_bundles", {}):
+                    # feature measurement failed for this candidate: retry geometry-only so the summary still exists
+                    try:
+                        backend, self.features.backend = self.features.backend, None
+                        self.features.run(bb, descs[best["component_id"]], spacing, source_id=bb.case_id)
+                    except Exception as e:
+                        bb.say("moderator", f"candidate {best['component_id']}: extent measurement unavailable ({type(e).__name__}); "
+                                            "no plan can be keyed without measurements.")
+                    finally:
+                        self.features.backend = backend
+                pe = (self.extent.run(bb, best["component_id"])
+                      if best["component_id"] in bb.arrays.get("feature_bundles", {}) else None)
+                reviewed = "clinician-reviewed extent measurements, clinical confirmation of ECR"
+            if pe is None:
+                status = "ecr_suggested_measurements_unavailable"
+                actions.append("Measurements could not be computed for the leading candidate; review the masks and re-run before any plan.")
+            else:
+                suggested_stage = pe.content
+                pl = self.planner.run(bb, mods, policy, tooth_type, age_years)
+                plan = pl.content
+                plan["conditional_on"] = (f"clinical confirmation of ECR and {reviewed}"
+                                          if status == "ecr_possible_conditional_plan" else
+                                          f"{reviewed} and clinical inputs")
+                if plan["irreversible_options_in_safe_set"]:
+                    actions.append("Irreversible options are in the safe set: explicit confirmation required before any is chosen.")
         bb.say("moderator", f"{status}: {dx['statement']}")
         return {"status": status, "candidates": cand_rows, "suggested_diagnosis": dx,
-                "suggested_patel": suggested_patel, "suggested_plan": plan, "clinician_actions_required": actions}
+                stage_key: suggested_stage, "suggested_plan": plan, "clinician_actions_required": actions}
 
     # ------------------------------------------------------------------ #
     def save_outputs(self, consensus: Dict, out_dir: str, volume=None) -> List[str]:
@@ -341,9 +404,47 @@ def consensus_markdown(c: Dict) -> str:
             L += ["Skeptic challenges:"] + [f"- ({ch['severity']}) {ch['issue']}" for ch in dx["unresolved_challenges"]] + [""]
         if dx.get("suggested_next_steps"):
             L += ["Suggested work-up for the leading alternative:"] + [f"- {x}" for x in dx["suggested_next_steps"]] + [""]
+    se = c.get("suggested_extent")
+    if se:
+        L += ["## Measured extent summary (descriptive, not a staging code)", "", se.get("narrative", ""), "",
+              f"- Extent descriptor: **{se['extent_descriptor']}** (score {se.get('extent_score')}/8)",
+              f"- Pulp relationship: **{se['pulp_relationship']}**",
+              f"- Access descriptor: **{se['access_descriptor']}**",
+              f"- Measurement confidence: {se.get('measurement_confidence', 'n/a')}; descriptors near a band edge: "
+              f"{', '.join(se.get('near_boundary') or []) or 'none'}; unavailable measurements: {', '.join(se.get('unavailable') or []) or 'none'}", ""]
+    fbs = c.get("feature_bundles") or {}
+    if fbs:
+        L += ["## Feature measurements (VLM visual features + voxel geometry)", ""]
+        for cid, b in fbs.items():
+            vlm = b.get("vlm") or {}
+            vis = b.get("visual") or {}
+            L += [f"### Candidate {cid}", "",
+                  f"VLM status: `{vlm.get('status', 'n/a')}` ({vlm.get('backend', 'none')}); visual features assessed: {vis.get('assessed', False)}", ""]
+            if vis.get("assessed"):
+                L += ["| visual feature | value | VLM confidence |", "|---|---|---|"]
+                L += [f"| {k} | {vis.get(k)} | {(vis.get('confidence') or {}).get(k, 'n/a')} |"
+                      for k in vis if k not in ("assessed", "confidence", "free_text")]
+                if vis.get("free_text"):
+                    L += ["", f"Model description: {vis['free_text']}"]
+                L += [""]
+            ms = b.get("measurements") or {}
+            if ms:
+                L += ["| measurement | value | unit | source | verified | confidence | VLM value | agreement |", "|---|---|---|---|---|---|---|---|"]
+                for k, m in ms.items():
+                    v = m.get("value")
+                    vs = f"{v:.2f}" if isinstance(v, float) else str(v)
+                    L.append(f"| {k} | {vs} | {m.get('unit')} | {m.get('source')} | {m.get('verified')} | "
+                             f"{m.get('confidence', 0):.2f} | {m.get('vlm_value', '-')} | {m.get('vlm_agreement', '-')} |")
+                L += [""]
+            if b.get("unverified_vlm_values"):
+                L += ["Unverifiable VLM values (not geometrically checkable, **not used** for planning): " + ", ".join(b["unverified_vlm_values"]), ""]
+            if b.get("vlm_geometry_disagreements"):
+                L += ["VLM / geometry disagreements (geometry wins):"] + [f"- {d}" for d in b["vlm_geometry_disagreements"]] + [""]
+        L += ["The model never sees the measured numbers; every value it reports is checked against the voxel geometry, and values "
+              "that cannot be checked are flagged and excluded from the extent summary and plan.", ""]
     sp = c.get("suggested_patel")
     if sp:
-        L += ["## Suggested Patel 3D classification", "",
+        L += ["## Suggested Patel 3D classification (LEGACY scheme, opt-in)", "",
               f"**{sp['code']}** - apical extent {sp['apical_extent_mm']:.1f} mm from CEJ, spread {sp['spread_deg']:.0f} deg, "
               f"canal distance {sp['min_canal_distance_mm']:.2f} mm, volume {sp['lesion_volume_mm3']:.1f} mm3, "
               f"borderline={sp['borderline']} (height margin {sp['height_margin_mm']:.2f} mm, spread margin "
@@ -359,8 +460,13 @@ def consensus_markdown(c: Dict) -> str:
         if pl["contingencies"]:
             L += ["", "Contingencies:"] + [f"- if `{k['input']}` is true -> {k['if_true']}; if false -> {k['if_false']}"
                                            for k in pl["contingencies"]]
-        if pl["end_stage"]:
+        if pl.get("end_stage"):
             L += ["", "End-stage code: see `end_stage_matrix` in the JSON report."]
+        if pl.get("escalation_considerations"):
+            L += ["", "Escalation considerations (measurement-indexed):"] + [f"- {x}" for x in pl["escalation_considerations"]]
+        if rr.get("requires_confirmation"):
+            L += ["", "**Irreversible options are present in the safe set: they require explicit clinician confirmation and are never "
+                      "selected by the software.**"]
         L += ["", f"Follow-up: {pl['follow_up']}", ""]
         L += ["Rationale:"] + [f"- {r}" for r in rr["rationale"]] + [""]
         if pl.get("cdt_codes"):

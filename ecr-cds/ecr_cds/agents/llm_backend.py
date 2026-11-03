@@ -168,6 +168,10 @@ def default_cluster_key(obj: Dict[str, Any]) -> str:
     """
     lead = None
     diff = obj.get("differential")
+    if diff is None and isinstance(obj.get("visual_features"), dict):
+        # rev 2.9 feature-measurement answers: cluster on the categorical visual features
+        vf = obj["visual_features"]
+        return "features|" + "|".join(f"{k}={str(vf.get(k)).lower()[:24]}" for k in sorted(vf))
     if isinstance(diff, list) and diff:
         try:
             lead = max(diff, key=lambda it: float(it.get("probability", 0) or 0)).get("diagnosis")

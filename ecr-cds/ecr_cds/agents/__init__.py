@@ -5,6 +5,7 @@ from .llm_backend import LocalHFBackend, LLMBackend, NullBackend, OpenAICompatib
 from .orchestrator import CaseConference, consensus_markdown, record_diagnosis_feedback
 from .roles import (AnatomyAgent, ClassifierAgent, ClinicalCorrelationAgent, ImagingQAAgent, LesionScreeningAgent,
                     RadiologistAgent, SkepticAgent, TreatmentPlannerAgent)
+from .feature_measurement import ExtentSummaryAgent, FeatureMeasurementAgent, bundle_feature_notes
 from .clinical import ClinicalFindings
 from .criteria import DIAGNOSTIC_QUESTIONS, answer_questions
 
@@ -12,4 +13,5 @@ __all__ = ["Blackboard", "Evidence", "CRITERIA", "HYPOTHESES", "PRIOR", "LLMBack
            "OpenAICompatibleBackend", "PerplexitySDKBackend", "auto_backend", "CaseConference",
            "consensus_markdown", "record_diagnosis_feedback", "AnatomyAgent", "ClassifierAgent", "ImagingQAAgent",
            "LesionScreeningAgent", "RadiologistAgent", "SkepticAgent", "TreatmentPlannerAgent",
-           "ClinicalCorrelationAgent", "ClinicalFindings", "DIAGNOSTIC_QUESTIONS", "answer_questions"]
+           "ClinicalCorrelationAgent", "ClinicalFindings", "DIAGNOSTIC_QUESTIONS", "answer_questions",
+           "FeatureMeasurementAgent", "ExtentSummaryAgent", "bundle_feature_notes"]

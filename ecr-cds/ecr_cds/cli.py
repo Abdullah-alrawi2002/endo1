@@ -110,7 +110,8 @@ def cmd_feedback(ns):
     ctx = ClinicalContext(patel=patel, mods=mods, tooth_type=rep.get("tooth_type", "unknown"),
                           age_years=rep.get("age_years"))
     d = rep["decision"]
-    decision = Decision(patel_code=d["patel_code"], chosen=Treatment(d["chosen"]),
+    decision = Decision(cell_key=d.get("cell_key") or d["patel_code"], cell_scheme=d.get("cell_scheme", "patel_3d"),
+                        chosen=Treatment(d["chosen"]),
                         ranking=[Treatment(x) for x in d["ranking"]], propensities=d["propensities"],
                         safe_set=[Treatment(x) for x in d["safe_set"]],
                         requires_confirmation=d["requires_confirmation"],
@@ -226,14 +227,16 @@ def cmd_conference(ns):
         else:
             seed, seed_source = choose_seed(score_candidates_radiolucency(auto, vol.array, vol.spacing))
         tooth_seg = AutoToothSegmenter(auto, seed)
-    conf = CaseConference(backend=auto_backend(ns.llm), max_rounds=ns.rounds)
+    conf = CaseConference(backend=auto_backend(ns.llm), max_rounds=ns.rounds, staging_scheme=ns.staging_scheme,
+                          vlm_features=not ns.no_vlm_features)
     cej = tuple(int(v) for v in ns.cej.split(",")) if ns.cej else None
     apex = tuple(int(v) for v in ns.apex.split(",")) if ns.apex else None
     rep = conf.run(vol, tooth_seg, seed, seed_source=seed_source, auto=auto,
                    canal_source="expert_mask" if ns.canal_mask else None, cej_zyx=cej, apex_zyx=apex,
                    modifiers=_modifiers(ns), policy=_load_policy(ns.policy), tooth_type=ns.tooth_type,
                    age_years=ns.age, case_id=ns.case_id, verify_mode=ns.verify_mode,
-                   sharpen_display=ns.sharpen_display, counterfactual_check=ns.counterfactual)
+                   sharpen_display=ns.sharpen_display, counterfactual_check=ns.counterfactual,
+                   buccal_direction=_buccal(ns))
     paths = conf.save_outputs(rep, ns.out, volume=vol)
     print(consensus_markdown(rep))
     print("written:", *paths, sep="\n  ")
@@ -259,7 +262,9 @@ def cmd_diagnocat_run(ns):
     rep = run_diagnocat_pipeline(vol, study, chart=chart, teeth_iso=teeth, max_teeth=ns.max_teeth,
                                  backend=auto_backend(ns.llm), max_rounds=ns.rounds, modifiers=_modifiers(ns),
                                  out_dir=ns.out, verify=not ns.no_verify, verify_mode=ns.verify_mode,
-                                 sharpen_display=ns.sharpen_display, counterfactual_check=ns.counterfactual)
+                                 sharpen_display=ns.sharpen_display, counterfactual_check=ns.counterfactual,
+                                 staging_scheme=ns.staging_scheme, vlm_features=not ns.no_vlm_features,
+                                 buccal_direction=_buccal(ns))
     print(patient_markdown(rep)[:4000])
     print("written:", os.path.join(ns.out, "patient_report.json"), os.path.join(ns.out, "patient_summary.md"))
 
@@ -272,6 +277,21 @@ def _rev28_flags(p):
                    help="also show the vision model a candidate-filled frame; weak image grounding caps its weight at 0.2")
     p.add_argument("--sharpen-display", dest="sharpen_display", action="store_true",
                    help="unsharp-mask the evidence frames (display only; recorded in the frame provenance)")
+
+
+def _rev29_flags(p):
+    """Rev 2.9 feature-measurement options (docs/VLM_FEATURE_MEASUREMENT.md)."""
+    p.add_argument("--staging-scheme", dest="staging_scheme", default="measurement", choices=["measurement", "patel_3d"],
+                   help="'measurement' (default): descriptive extent summary from VLM features + voxel geometry, no staging "
+                        "codes; 'patel_3d': legacy classifier, reproduces rev <= 2.8 outputs")
+    p.add_argument("--no-vlm-features", dest="no_vlm_features", action="store_true",
+                   help="skip the VLM visual-feature query; measurements are still computed from the voxel geometry")
+    p.add_argument("--buccal", help="buccal direction vector z,y,x in voxel axes (gives the BL / MD extents a patient frame)")
+
+
+def _buccal(ns):
+    b = getattr(ns, "buccal", None)
+    return tuple(float(v) for v in b.split(",")) if b else None
 
 
 def main(argv=None):
@@ -323,7 +343,7 @@ def main(argv=None):
     c.add_argument("--llm", default="auto", choices=["auto", "none", "openai", "perplexity", "nemotron"],
                    help="'nemotron' = local Nemotron 3.5 Bolt via an OpenAI-compatible server (NEMOTRON_BASE_URL)")
     c.add_argument("--rounds", type=int, default=2); c.add_argument("--policy", default="policy.json")
-    _rev28_flags(c)
+    _rev28_flags(c); _rev29_flags(c)
     c.add_argument("--case-id"); c.add_argument("--expected-slices", type=int)
     c.add_argument("--tooth-type", default="unknown"); c.add_argument("--age", type=float)
     for m_ in ("symptomatic", "pulp-vital", "restorable", "perio", "multirooted", "accessible",
@@ -341,7 +361,7 @@ def main(argv=None):
     d.add_argument("--llm", default="auto", choices=["auto", "none", "openai", "perplexity", "nemotron"],
                    help="'nemotron' = local Nemotron 3.5 Bolt via an OpenAI-compatible server (NEMOTRON_BASE_URL)")
     d.add_argument("--no-verify", action="store_true"); d.add_argument("--expected-slices", type=int)
-    _rev28_flags(d)
+    _rev28_flags(d); _rev29_flags(d)
     for m_ in ("symptomatic", "pulp-vital", "restorable", "perio", "multirooted", "accessible",
                "bleeding", "growing", "aesthetic", "fracture-risk"):
         d.add_argument(f"--{m_}", dest=m_.replace("-", "_"))

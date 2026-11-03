@@ -74,9 +74,12 @@ def run_diagnocat_pipeline(volume, study: Optional[DiagnocatStudy], chart: Optio
                            out_dir: Optional[str] = None, render: bool = True, verify: bool = True,
                            seeds_override: Optional[Dict[int, tuple]] = None, canal_masks: Optional[Dict[int, np.ndarray]] = None,
                            stl_kwargs: Optional[Dict] = None, verify_mode: str = "smooth", sharpen_display: bool = False,
-                           counterfactual_check: bool = False) -> Dict[str, Any]:
+                           counterfactual_check: bool = False, staging_scheme: str = "measurement",
+                           vlm_features: bool = True, buccal_direction=None) -> Dict[str, Any]:
     """stl_kwargs: origin_xyz / axis_order / flip passed to stl_to_mask (STL-to-DICOM alignment must be verified visually).
-    verify_mode / sharpen_display / counterfactual_check: rev 2.8 options forwarded to CaseConference.run (see docs/NEMOTRON_LOCAL.md)."""
+    verify_mode / sharpen_display / counterfactual_check: rev 2.8 options forwarded to CaseConference.run (see docs/NEMOTRON_LOCAL.md).
+    staging_scheme / vlm_features / buccal_direction: rev 2.9 feature-measurement options (docs/VLM_FEATURE_MEASUREMENT.md);
+    the default is the measurement-based extent summary, "patel_3d" re-enables the legacy classifier."""
     t0 = time.time()
     used_labels: set = set()
     toolkit = PerceptionToolkit()
@@ -90,7 +93,7 @@ def run_diagnocat_pipeline(volume, study: Optional[DiagnocatStudy], chart: Optio
     focus = chart.focus_teeth() if chart is not None else []
     per_tooth: List[Dict[str, Any]] = []
     examined: List[int] = []
-    conf = CaseConference(backend=backend, max_rounds=max_rounds)
+    conf = CaseConference(backend=backend, max_rounds=max_rounds, staging_scheme=staging_scheme, vlm_features=vlm_features)
     for ctx in contexts[:max_teeth]:
         if seeds_override and ctx.iso_number in seeds_override:
             seed, seed_src, mask = tuple(seeds_override[ctx.iso_number]), "clinician", None
@@ -119,17 +122,18 @@ def run_diagnocat_pipeline(volume, study: Optional[DiagnocatStudy], chart: Optio
                         case_id=f"{volume.metadata.get('SeriesInstanceUID_hash', 'case')}_t{ctx.iso_number}",
                         render_tiles=render, context=ctx, toolkit=toolkit, verify=verify, verify_mode=verify_mode,
                         sharpen_display=sharpen_display, counterfactual_check=counterfactual_check,
-                        examined_teeth=list(examined), focus_teeth=focus)
+                        examined_teeth=list(examined), focus_teeth=focus, buccal_direction=buccal_direction)
         if out_dir:
             conf.save_outputs(cons, os.path.join(out_dir, f"tooth_{ctx.iso_number}"), volume=volume)
         per_tooth.append({"iso_number": ctx.iso_number, "seed_zyx": list(map(int, seed)), "seed_source": seed_src,
                           "status": cons["status"], "suggested_diagnosis": cons.get("suggested_diagnosis"),
+                          "suggested_extent": cons.get("suggested_extent"), "feature_bundles": cons.get("feature_bundles"),
                           "suggested_patel": cons.get("suggested_patel"), "suggested_plan": cons.get("suggested_plan"),
                           "coverage": cons.get("coverage"), "verification": cons.get("verification"),
                           "context": ctx.to_dict(), "report": cons})
     unexamined = [c.iso_number for c in contexts[max_teeth:]]
     report = {
-        "patient_report_version": "2.7",
+        "patient_report_version": "2.9",
         "source_volume": volume.metadata, "spacing_zyx_mm": list(map(float, volume.spacing)),
         "diagnocat_study": study.to_dict() if study is not None else None,
         "chart": chart.to_dict() if chart is not None else None,
@@ -153,16 +157,24 @@ def run_diagnocat_pipeline(volume, study: Optional[DiagnocatStudy], chart: Optio
     return report
 
 
+def _extent_cell(t: Dict[str, Any]) -> str:
+    se = t.get("suggested_extent")
+    if se:
+        return f"{se['extent_descriptor']} / {se['pulp_relationship']} / {se['access_descriptor']}"
+    sp = t.get("suggested_patel")   # legacy scheme only
+    return f"legacy {sp['code']}" if sp else "-"
+
+
 def patient_markdown(r: Dict[str, Any]) -> str:
     L = [f"# Patient-level ECR review (rev {r['patient_report_version']})", "", "> " + r["disclaimer"], "",
          f"Teeth examined: {r['teeth_examined'] or 'none'}; not examined (below priority cut): {r['teeth_not_examined'] or 'none'}", "",
          "## Triage order", "", "| tooth (FDI) | type | priority |", "|---|---|---|"]
     L += [f"| {t['iso_number']} | {t['tooth_type']} | {t['priority']} |" for t in r["triage_order"]]
-    L += ["", "## Per-tooth outcome", "", "| tooth | seed source | status | leading | P(ECR) | Patel | plan primary |", "|---|---|---|---|---|---|---|"]
+    L += ["", "## Per-tooth outcome", "", "| tooth | seed source | status | leading | P(ECR) | measured extent | plan primary |", "|---|---|---|---|---|---|---|"]
     for t in r["per_tooth"]:
         dx = t.get("suggested_diagnosis") or {}
         L.append(f"| {t['iso_number']} | {t.get('seed_source', '-')} | {t['status']} | {dx.get('leading', '-')} | "
-                 f"{dx.get('p_ecr_uncalibrated', '-')} | {(t.get('suggested_patel') or {}).get('code', '-')} | "
+                 f"{dx.get('p_ecr_uncalibrated', '-')} | {_extent_cell(t)} | "
                  f"{((t.get('suggested_plan') or {}).get('rule_recommendation') or {}).get('primary', '-')} |")
     L += ["", "## Diagnocat scope (cited)", ""]
     L += [f"- `{s['id']}` ({s['source']}): {s['text']} [{s['url']}]" for s in r["knowledge_scope"]]

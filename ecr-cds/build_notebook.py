@@ -604,7 +604,7 @@ if RECORD_FEEDBACK:
     rep = auto_report; d = rep["decision"]
     patel = PatelParameters(**{k: v for k, v in rep["patel"].items() if k != "code"})
     ctx = ClinicalContext(patel, clinical, TOOTH_TYPE or "unknown", AGE_YEARS)
-    dec = Decision(d["patel_code"], Treatment(d["chosen"]), [Treatment(x) for x in d["ranking"]], d["propensities"],
+    dec = Decision(d.get("cell_key") or d["patel_code"], Treatment(d["chosen"]), [Treatment(x) for x in d["ranking"]], d["propensities"],
                    [Treatment(x) for x in d["safe_set"]], d["requires_confirmation"], d["reinspect_requested"], d["rationale"])
     fb = Feedback(Treatment(CLINICIAN_CHOICE), case_id=CASE_ID, **({} if OUTCOME is None else
                   {"outcome_success": OUTCOME.get("success"), "outcome_survival": OUTCOME.get("survival"), "follow_up_months": OUTCOME.get("months")}))

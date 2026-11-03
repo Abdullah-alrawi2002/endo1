@@ -30,9 +30,10 @@ It is a clinician attestation. The candidate screen itself never issues treatmen
 
 ## Multi-agent case conference (rev 2.4)
 
-`ecr_cds.agents` runs eight agents (imaging QA, anatomy, lesion screening, radiologist, skeptic, Patel classifier,
-treatment planner, moderator) over a shared blackboard and returns a **suggested** diagnosis and treatment plan
-with a full evidence trail. Optional LLM/VLM second opinion via `auto_backend()`; rules-only otherwise.
+`ecr_cds.agents` runs the agents (imaging QA, anatomy, lesion screening, radiologist, skeptic, feature measurement,
+extent summary, treatment planner, moderator; the Patel classifier only as a legacy opt-in since rev 2.9) over a
+shared blackboard and returns a **suggested** diagnosis and treatment plan with a full evidence trail. Optional
+LLM/VLM second opinion via `auto_backend()`; rules-only otherwise.
 
 ```bash
 python -m ecr_cds.cli conference --dicom scan.zip --out conference_out --llm auto   # or --llm none
@@ -77,6 +78,28 @@ See `docs/DIAGNOCAT_INTEGRATION.md` and `docs/PERCEPTION_AGENT_ARCHITECTURE.md`.
 See `docs/NEMOTRON_LOCAL.md` (serving recipes, guards, caveats) and `docs/RECOGNITION_ACCURACY_RESEARCH.md`
 (evidence table, adopted vs rejected, ablation).
 
+## VLM feature measurement and measurement-based extent summary (rev 2.9)
+
+* `ecr_cds.perception.vlm_features` + `feature_schema`: for every candidate, a typed `FeatureBundle` of categorical
+  **visual features** read by a local OpenAI-compatible VLM (radiolucency texture, borders, fibro-osseous interior,
+  pericanal line, portal visibility / surface, restoration-margin relation, burnout, beam hardening) and 13
+  **physical measurements** computed from the voxel geometry (long-axis / MD / BL extents, limits from the CEJ and
+  bone crest, depth, circumferential extent, dentine volume fraction, canal distance / communication, volume), each
+  with confidence and provenance. The model never sees the numbers; its estimates are cross-checked, geometry
+  always wins, and values geometry cannot verify are flagged `vlm_unverified` and excluded from planning.
+* `FeatureMeasurementAgent` posts the bundle; radiologist, skeptic, clinical-correlation and planner consume it.
+  `ExtentSummaryAgent` replaces the Patel classifier on the default path with a descriptive extent summary
+  (extent / pulp relationship / access descriptors + narrative, **no staging codes**), and the planner's safe set is
+  keyed by that summary through a documented measurement-indexed mapping (`docs/measurement_matrix.csv`).
+  `--staging-scheme patel_3d` reproduces the rev <= 2.8 outputs.
+
+```bash
+NEMOTRON_BASE_URL=http://127.0.0.1:8080/v1 python -m ecr_cds.cli conference --dicom scan.zip --out out --llm nemotron --buccal 0,1,0
+python tests/test_vlm_features.py   # schema, geometry vs phantom truth, flagging, mapping, conference e2e with a fake VLM (~4 min)
+```
+
+See `docs/VLM_FEATURE_MEASUREMENT.md`.
+
 ## Tests
 
 ```bash
@@ -87,6 +110,7 @@ python tests/test_agents.py        # multi-agent conference on phantoms (~9 min)
 python tests/test_finetune.py      # fine-tuning data pipeline (~1.5 min, no GPU)
 python tests/test_diagnocat.py     # Diagnocat ingestion, context priors, perception tools, knowledge/CDT (~1.5 min)
 python tests/test_ecr_detection.py # cervical vs noncervical/internal fixtures and abstention
+python tests/test_vlm_features.py  # rev 2.9 feature-measurement layer (fake VLM server, ~4 min)
 ```
 
 ## Colab notebook

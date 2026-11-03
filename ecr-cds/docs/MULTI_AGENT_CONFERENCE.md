@@ -18,10 +18,16 @@ DICOM/ZIP ──► ImagingQAAgent ──► AnatomyAgent ──► LesionScreen
                              ModeratorAgent (consensus, thresholds, actions required)
                                    │ ECR suggested / possible
                                    ▼
-                      ClassifierAgent (Patel 3D) ──► TreatmentPlannerAgent (matrix + RL policy)
-                                                      ▼
+        FeatureMeasurementAgent (VLM features + voxel measurements, every candidate, rev 2.9)
+                                   │
+                      ExtentSummaryAgent (descriptive extent, rev 2.9 default)  ──► TreatmentPlannerAgent
+                      [legacy opt-in: ClassifierAgent (Patel 3D), staging_scheme="patel_3d"]   (measurement-indexed
+                                                      ▼                                        mapping + RL policy)
                             conference_report.json / conference_summary.md / masks / tiles
 ```
+
+Rev 2.9: the staging classifier is no longer on the default path. See `docs/VLM_FEATURE_MEASUREMENT.md` for the
+feature bundle, the extent summary and the measurement-indexed safe-set mapping.
 
 All agents read and write a shared **blackboard** (`agents/blackboard.py`). Each `Evidence`
 item carries agent, kind, payload, basis (`measurement` | `rule` | `llm` | `clinician`),
@@ -38,8 +44,10 @@ the report (`conference` key) together with a human-readable transcript.
 | `LesionScreeningAgent` | crop | `CervicalResorptionDetector` candidates, `CandidateDescriptors`, orthogonal tiles | measurement |
 | `RadiologistAgent` | descriptors (+ tiles for a VLM) | per-candidate differential over 6 hypotheses, criteria for/against, band | rule (+ llm) |
 | `SkepticAgent` | descriptors + radiologist evidence | challenges with severity (landmarks, artefacts, mimics, size, truncation) | rule (+ llm) |
-| `ClassifierAgent` | accepted candidate mask | Patel height/spread/proximity with margins and borderline flag | measurement |
-| `TreatmentPlannerAgent` | Patel code, clinical inputs, policy | matrix primary/alternatives, constrained-bandit ranking, contingencies, follow-up | rule + policy |
+| `FeatureMeasurementAgent` (rev 2.9) | candidate mask, masks, spacing, evidence frame (+ local VLM) | `feature_bundle`: categorical visual features from the model, 13 voxel-geometry measurements with confidence / provenance, VLM-vs-geometry reconciliation, unverified values flagged | measurement (+ vlm) |
+| `ExtentSummaryAgent` (rev 2.9, default) | feature bundle of the leading candidate | `extent_summary`: extent / pulp-relationship / access descriptors with the measurements behind them, narrative; not a staging code | measurement |
+| `ClassifierAgent` (legacy, `staging_scheme="patel_3d"` only) | accepted candidate mask | Patel height/spread/proximity with margins and borderline flag | measurement |
+| `TreatmentPlannerAgent` | extent summary (default) or legacy code, clinical inputs, policy | measurement-cell primary/alternatives, constrained-bandit ranking, contingencies, escalation considerations, follow-up | rule + policy |
 | moderator (`CaseConference._moderate`) | all of the above | status, suggested diagnosis/plan, clinician actions | rule |
 
 ### Visual descriptors (`agents/visual_features.py`)
@@ -65,7 +73,7 @@ descriptors with the evidence string kept in the report:
 | Q4 | Preserved pericanalar dentine while wrapping? | minimum canal distance, canal wall intact, spread > 180° |
 | Q5 | Resorption rather than caries / smooth cavity? | roughness, asymmetry, inclusions, apical extent, dense-material contact (score 0–5) |
 | Q6 | Persists in three planes as a 3-D defect? | axial levels, in-plane extents, threshold stability, metal proximity |
-| Q7 | How extensive? | Patel height / spread / pulp relationship (classifier agent) |
+| Q7 | How extensive? | apical reach / circumferential extent / pulp relationship, measured (feature-measurement and extent-summary agents) |
 | Q8 | Does the clinical picture fit? | clinician-entered `ClinicalFindings` (pink spot, hard irregular defect, bleeding on probing, pulp sensibility, history, restoration at defect) |
 
 Seven cue-level criteria back these questions in the posterior (external contour interrupted,
@@ -109,7 +117,7 @@ model can lower the final confidence but cannot lift the band above the anatomy 
 
 | status | meaning |
 |---|---|
-| `suggested_ecr_with_plan` | leading hypothesis ECR with P ≥ 0.50 → Patel code + plan suggested |
+| `suggested_ecr_with_plan` | leading hypothesis ECR with P ≥ 0.50 → measured extent summary (legacy: Patel code) + plan suggested |
 | `ecr_possible_conditional_plan` | 0.35 ≤ P(ECR) < 0.50 or ECR not leading → plan shown *conditional on clinical confirmation* |
 | `no_ecr_suggested` | leading alternative with generic work-up steps; **does not exclude ECR** |
 | `no_candidates` | screen retained nothing; **does not exclude ECR** |
@@ -126,14 +134,14 @@ model can lower the final confidence but cannot lift the band above the anatomy 
 
 ## Results on phantoms (software tests, `tests/test_agents.py`)
 
-| phantom | conference status | Patel | matrix primary |
+| phantom | conference status | measured extent (rev 2.9 default; legacy `patel_3d` code in brackets) | matrix primary |
 |---|---|---|---|
-| ECR morphology, 3 mm, 150°, no perforation | `suggested_ecr_with_plan` | 2Bd (truth 2Bd) | external_repair, contingencies on pulp vitality / symptoms |
-| ECR morphology, 9 mm, 150°, perforating | `suggested_ecr_with_plan` | 3Bp (truth 3Bp) | intentional_replantation (irreversible → confirmation flagged) |
+| ECR morphology, 3 mm, 150°, no perforation | `suggested_ecr_with_plan` | moderate / dentine_barrier_preserved / supracrestal_portal (legacy 2Bd) | external_repair, contingencies on pulp vitality / symptoms |
+| ECR morphology, 9 mm, 150°, perforating | `suggested_ecr_with_plan` | extensive / canal_communication / supracrestal_portal (legacy 3Bp) | internal_repair_rct; intentional replantation / extraction in the safe set (irreversible → confirmation flagged) |
 | NCCL saucer, 1 mm, 80° | `no_ecr_suggested` (leading NCCL) | – | – |
 | intact tooth | `no_candidates` | – | – |
 | internal resorption (canal-centred balloon) | `no_ecr_suggested`, leading internal_resorption; Q1 no, Q2 no | – | RCT work-up suggested |
-| open wedge + pink spot, bleeding, hard defect | `suggested_ecr_with_plan`, Q8 consistent | 2Bp | external_repair_rct |
+| open wedge + pink spot, bleeding, hard defect | `suggested_ecr_with_plan`, Q8 consistent | measured extent with canal communication (legacy 2Bp) | external_repair_rct |
 | scripted model voting "caries" | logged as second opinion; P(ECR) falls, band ≠ high | | |
 
 Open wedge without findings sits near the decision threshold by design. Phantom geometry is synthetic; these tests show the code behaves as designed, not that it
@@ -189,5 +197,5 @@ per-candidate weight, entropy and grounding verdict.
 * Text-only backends never see the images; vision backends see one multiplanar evidence frame per candidate
   (rev 2.8; earlier revisions sent three 12 mm tiles). The local Nemotron path was tested only against a scripted
   stand-in server, not the real model.
-* The planner reuses the Patel→ESE matrix; its recommendations remain provisional until the
+* The planner uses a measurement-indexed mapping aligned with the ESE statements (legacy opt-in: the Patel→ESE matrix); its recommendations remain provisional until the
   clinician enters reviewed components and clinical inputs (notebook Section 5).

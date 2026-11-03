@@ -23,7 +23,7 @@ DICOM  --->  Diagnocat (segmentation, FDI numbering, per-tooth conditions, STL, 
    |            ToothContext per tooth (ecr_cds.diagnocat.context + PatientChart)
    |              prior shifts, clinical-modifier hints, canal hint, metal expected, triage priority
    v                      v
-Perception layer (ecr_cds.perception) ----> agent layer (ecr_cds.agents) ----> diagnosis, Patel, plan, CDT codes
+Perception layer (ecr_cds.perception) ----> agent layer (ecr_cds.agents) ----> diagnosis, measured extent, plan, CDT codes
    segment / propose / delineate / measure    context, QA, anatomy, screening, verifier, radiologist, skeptic,
    reformat / re-verify, provenance           clinical correlation, classifier, planner, coverage, knowledge, moderator
 ```

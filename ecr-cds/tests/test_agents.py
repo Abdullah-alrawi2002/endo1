@@ -36,14 +36,17 @@ class ScriptedBackend(LLMBackend):
                 "key_findings_for": ["x"], "key_findings_against": ["y"], "uncertainties": ["z"]}
 
 
-def test_ecr_phantom_suggests_ecr_with_patel_and_plan():
+def test_ecr_phantom_suggests_ecr_with_extent_and_plan():
     vol, segm, truth = _case(3.0, 150, False, "ecr")
     c = CaseConference(max_rounds=2).run(vol, segm, SEED, "phantom_truth", render_tiles=False)
     assert c["status"] == "suggested_ecr_with_plan", c["status"]
     dx = c["suggested_diagnosis"]
     assert dx["leading"] == "ECR" and dx["p_ecr_uncalibrated"] >= 0.5
     assert dx["band"] == "moderate", "band must be capped while landmarks are automatic"
-    assert c["suggested_patel"]["code"] == "2Bd", c["suggested_patel"]["code"]
+    se = c["suggested_extent"]   # rev 2.9: descriptive measurement summary replaces the Patel code on the default path
+    assert (se["extent_descriptor"], se["pulp_relationship"], se["access_descriptor"]) == \
+        ("moderate", "dentine_barrier_preserved", "supracrestal_portal"), se
+    assert se["is_staging_code"] is False and "suggested_patel" not in c
     qa = {q["id"]: q["answer"] for q in dx["diagnostic_questions"]}
     assert qa["Q1"] == "yes" and qa["Q2"] == "yes" and qa["Q3"] == "yes" and qa["Q6"] == "yes", qa
     assert dx["clinical_correlation"] == "not_assessed"
@@ -54,29 +57,41 @@ def test_ecr_phantom_suggests_ecr_with_patel_and_plan():
     assert c["requires_confirmation"] is True and c["clinical_validation"] is False
     # evidence trail is complete and serialisable
     kinds = {e["kind"] for e in c["conference"]["evidence"]}
-    assert {"qa", "anatomy", "screen_summary", "candidate", "differential", "challenge", "patel", "plan"} <= kinds
-    json.dumps(c, default=str)
+    assert {"qa", "anatomy", "screen_summary", "candidate", "differential", "challenge", "feature_bundle",
+            "extent_summary", "plan"} <= kinds and "patel" not in kinds
+    js = json.dumps(c, default=str)
+    assert "patel_code" not in js and plan["rule_recommendation"]["cell_scheme"] == "measurement_v1"
     md = consensus_markdown(c)
-    assert "Suggested treatment plan" in md and "Conference transcript" in md
-    print("PASS ecr phantom ->", dx["statement"][:90], "| Patel", c["suggested_patel"]["code"])
+    assert "Suggested treatment plan" in md and "Conference transcript" in md and "Measured extent summary" in md
+    print("PASS ecr phantom ->", dx["statement"][:90], "| extent", se["extent_descriptor"], se["pulp_relationship"])
 
 
-def test_deep_perforating_ecr_gets_level3_and_end_stage_logic():
+def test_deep_perforating_ecr_gets_extensive_communication_and_escalation_logic():
     vol, segm, truth = _case(9.0, 150, True, "ecr")
     c = CaseConference(max_rounds=1).run(vol, segm, SEED, "phantom_truth", render_tiles=False)
     assert c["status"] == "suggested_ecr_with_plan"
-    assert c["suggested_patel"]["code"] == "3Bp"
+    se = c["suggested_extent"]
+    assert se["extent_descriptor"] == "extensive" and se["pulp_relationship"] == "canal_communication", se
     assert c["suggested_plan"]["end_stage"] is False
     assert "intentional_replantation" in c["suggested_plan"]["irreversible_options_in_safe_set"]
+    assert any("Canal communication" in x for x in c["suggested_plan"]["escalation_considerations"])
     assert any("Irreversible" in a for a in c["clinician_actions_required"])
-    print("PASS deep perforating ecr -> 3Bp, irreversible options flagged")
+    print("PASS deep perforating ecr -> extensive / canal_communication, irreversible options flagged")
+
+
+def test_legacy_patel_scheme_opt_in_reproduces_rev28():
+    vol, segm, truth = _case(9.0, 150, True, "ecr")
+    c = CaseConference(max_rounds=1, staging_scheme="patel_3d").run(vol, segm, SEED, "phantom_truth", render_tiles=False)
+    assert c["status"] == "suggested_ecr_with_plan" and c["suggested_patel"]["code"] == "3Bp"
+    assert c["suggested_plan"]["cell_scheme"] == "patel_3d" and "suggested_extent" not in c
+    print("PASS legacy patel_3d opt-in -> 3Bp reproduced")
 
 
 def test_nccl_phantom_not_called_ecr():
     vol, segm, truth = _case(1.0, 80, False, "nccl")
     c = CaseConference(max_rounds=2).run(vol, segm, SEED, "phantom_truth", render_tiles=False)
     assert c["status"] == "no_ecr_suggested", c["status"]
-    assert c["suggested_patel"] is None and c["suggested_plan"] is None
+    assert c["suggested_extent"] is None and c["suggested_plan"] is None
     assert "does not exclude ECR" in c["suggested_diagnosis"]["statement"]
     print("PASS nccl phantom ->", c["suggested_diagnosis"]["leading"])
 
@@ -176,8 +191,9 @@ def test_record_diagnosis_feedback_idempotent():
 
 
 if __name__ == "__main__":
-    for t in [test_criteria_math_and_feedback_learning, test_ecr_phantom_suggests_ecr_with_patel_and_plan,
-              test_deep_perforating_ecr_gets_level3_and_end_stage_logic, test_nccl_phantom_not_called_ecr,
+    for t in [test_criteria_math_and_feedback_learning, test_ecr_phantom_suggests_ecr_with_extent_and_plan,
+              test_deep_perforating_ecr_gets_extensive_communication_and_escalation_logic,
+              test_legacy_patel_scheme_opt_in_reproduces_rev28, test_nccl_phantom_not_called_ecr,
               test_intact_tooth_has_no_candidates, test_llm_backend_is_second_opinion_not_override,
               test_internal_resorption_phantom_is_not_called_ecr, test_clinical_findings_shift_posterior_and_are_logged,
               test_record_diagnosis_feedback_idempotent]:

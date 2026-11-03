@@ -50,9 +50,13 @@ class Treatment(str, Enum):
                         Treatment.DECORONATION, Treatment.EXTRACTION}
 
 
+SCHEME_PATEL = "patel_3d"              # legacy 32-cell matrix keyed by a Patel code
+SCHEME_MEASUREMENT = "measurement_v1"  # rev 2.9 mapping keyed by measurement descriptors (no staging code)
+
+
 @dataclass
 class Recommendation:
-    patel_code: str
+    cell_key: str                   # Patel code (legacy scheme) or measurement descriptor key
     primary: Treatment
     alternatives: List[Treatment]
     safe_set: List[Treatment]
@@ -62,11 +66,18 @@ class Recommendation:
     flags: List[str] = field(default_factory=list)
     requires_confirmation: bool = False
     missing_inputs: List[str] = field(default_factory=list)
+    cell_scheme: str = SCHEME_PATEL
+
+    @property
+    def patel_code(self) -> Optional[str]:
+        """Legacy accessor: only meaningful for the Patel-indexed scheme."""
+        return self.cell_key if self.cell_scheme == SCHEME_PATEL else None
 
     def to_dict(self) -> Dict:
-        return {
+        d = {
             "missing_inputs": self.missing_inputs,
-            "patel_code": self.patel_code,
+            "cell_key": self.cell_key,
+            "cell_scheme": self.cell_scheme,
             "primary": self.primary.value,
             "alternatives": [a.value for a in self.alternatives],
             "safe_set": [a.value for a in self.safe_set],
@@ -76,6 +87,9 @@ class Recommendation:
             "flags": self.flags,
             "requires_confirmation": self.requires_confirmation,
         }
+        if self.cell_scheme == SCHEME_PATEL:
+            d["patel_code"] = self.cell_key
+        return d
 
 
 T = Treatment
@@ -159,17 +173,33 @@ def recommend_from_matrix(code: str, mods: ClinicalModifiers | None = None,
     primary, alts, prior, evidence = DECISION_MATRIX[code]
     ranking: List[T] = [primary] + [a for a in alts if a != primary]
     rationale = [f"Base cell {code}: {primary.value} ({evidence})."]
-    flags: List[str] = []
     height = int(code[0]); spread = code[1]; prox = code[2]
+    return _apply_modifier_rules(ranking, mods, prior, evidence, rationale, cell_key=code, cell_scheme=SCHEME_PATEL,
+                                 deep=height >= 3, pulp_involved=prox == "p", wide_or_deep=(height >= 3 or spread in "CD"),
+                                 end_stage=code in END_STAGE_CODES, portal_angle_deg=portal_angle_deg,
+                                 calcified_fraction=calcified_fraction, depth_label=f"height {height}")
 
+
+def _apply_modifier_rules(ranking: List[T], mods: ClinicalModifiers, prior: float, evidence: str, rationale: List[str], *,
+                          cell_key: str, cell_scheme: str, deep: bool, pulp_involved: bool, wide_or_deep: bool,
+                          end_stage: bool, portal_angle_deg: Optional[float], calcified_fraction: Optional[float],
+                          depth_label: str) -> Recommendation:
+    """Ordered clinical-modifier rules shared by the Patel-indexed and the measurement-indexed schemes.
+
+    deep            external surgical access unlikely because of lesion depth (legacy: height >= 3;
+                    measurement scheme: extensive extent or deep subcrestal portal)
+    pulp_involved   probable pulpal involvement (legacy: proximity 'p'; measurement scheme: canal communication)
+    wide_or_deep    triggers the extra required inputs (growing patient, multirooted)
+    """
+    flags: List[str] = []
     # Derive accessibility from portal angle if not given:
     # within ±45° of buccal (0°) or lingual (180°) counts as accessible.
     if mods.surgically_accessible is None and portal_angle_deg is not None:
         a = portal_angle_deg % 360
-        mods.surgically_accessible = (a <= 45 or a >= 315 or 135 <= a <= 225) and height <= 2
+        mods.surgically_accessible = (a <= 45 or a >= 315 or 135 <= a <= 225) and not deep
         why = "accessible" if mods.surgically_accessible else (
             "interproximal portal" if not (a <= 45 or a >= 315 or 135 <= a <= 225) else "deep (mid/apical third)")
-        rationale.append(f"Accessibility inferred from portal angle {a:.0f}° and height {height} -> {why}.")
+        rationale.append(f"Accessibility inferred from portal angle {a:.0f}° and {depth_label} -> {why}.")
     if mods.repair_phase is None and calcified_fraction is not None:
         mods.repair_phase = calcified_fraction >= 0.5
 
@@ -192,12 +222,12 @@ def recommend_from_matrix(code: str, mods: ClinicalModifiers | None = None,
 
     # R1. External approach not possible -> internal approach (Patel 2018 pt 2)
     if mods.surgically_accessible is False and ranking[0] in {T.EXTERNAL_REPAIR, T.EXTERNAL_REPAIR_RCT, T.EXTERNAL_REPAIR_VPT}:
-        if height <= 2:
+        if not deep:
             promote(T.INTERNAL_REPAIR_RCT, "R1: external access not feasible (interproximal / subcrestal) -> internal repair with RCT.")
         else:
-            promote(T.INTENTIONAL_REPLANT, "R1: external access not feasible in mid/apical third -> intentional replantation.")
+            promote(T.INTENTIONAL_REPLANT, "R1: external access not feasible for a deep lesion -> intentional replantation.")
     # R2. Perforation / pulpal signs -> RCT mandatory (no repair-only, no VPT if necrotic)
-    if prox == "p" or mods.symptomatic or mods.pulp_vital is False:
+    if pulp_involved or mods.symptomatic or mods.pulp_vital is False:
         remove(T.EXTERNAL_REPAIR, "R2: pulpal involvement or symptoms -> repair without RCT not permitted.")
         if mods.pulp_vital is False:
             remove(T.EXTERNAL_REPAIR_VPT, "R2b: non-vital pulp -> vital pulp therapy not permitted.")
@@ -237,17 +267,15 @@ def recommend_from_matrix(code: str, mods: ClinicalModifiers | None = None,
         ranking.insert(idx, T.DECORONATION)
         rationale.append("R8: growing patient -> decoronation ranked above extraction (ridge preservation).")
     # R9. Repair-phase lesion (bone-like calcification, asymptomatic) -> monitoring is reasonable
-    if mods.repair_phase and mods.symptomatic is not True and T.MONITOR in ranking and height >= 3:
+    if mods.repair_phase and mods.symptomatic is not True and T.MONITOR in ranking and deep:
         promote(T.MONITOR, "R9: lesion shows reparative calcification and no symptoms -> monitor before irreversible treatment.")
     # R10. Intentional replantation contraindications
     if mods.root_fracture_risk_high or mods.perio_support_adequate is False:
         remove(T.INTENTIONAL_REPLANT, "R10: fracture risk / periodontal disease -> intentional replantation contraindicated.")
     # R11. End-stage escalation hint
-    if code in END_STAGE_CODES:
+    if end_stage:
         flags.append("end_stage")
-        prior_adj = prior
-    else:
-        prior_adj = prior
+    prior_adj = prior
     if mods.symptomatic:
         prior_adj *= 0.9
     if mods.repair_phase:
@@ -258,7 +286,7 @@ def recommend_from_matrix(code: str, mods: ClinicalModifiers | None = None,
     primary_final = ranking[0]
     # Clinical inputs that materially change the ranking but were not supplied
     required = ["symptomatic", "pulp_vital", "restorable", "perio_support_adequate", "surgically_accessible"]
-    if height >= 3 or spread in "CD":
+    if wide_or_deep:
         required += ["growing_patient", "multirooted"]
     missing = [k for k in required if getattr(mods, k) is None]
     if missing:
@@ -266,12 +294,122 @@ def recommend_from_matrix(code: str, mods: ClinicalModifiers | None = None,
         rationale.append("Unknown clinical inputs: " + ", ".join(missing) +
                          " -> ranking is provisional; enter them before acting.")
     return Recommendation(
-        patel_code=code, primary=primary_final, alternatives=ranking[1:],
+        cell_key=cell_key, cell_scheme=cell_scheme, primary=primary_final, alternatives=ranking[1:],
         safe_set=list(ranking), prognosis_prior=float(prior_adj), evidence=evidence,
         rationale=rationale, flags=flags,
         requires_confirmation=primary_final.irreversible or bool(missing),
         missing_inputs=missing,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Rev 2.9: measurement-indexed safe-set mapping (no staging code)
+# --------------------------------------------------------------------------- #
+# Base cell: (extent_descriptor, pulp_relationship, access_descriptor) -> (primary, alternatives, prior, evidence).
+# The descriptors come from `ecr_cds.extent_summary` (continuous measurements banded by documented thresholds).
+# Anchors are the management *principles* of ESE 2023 and Patel 2018 part 2 - external repair for accessible
+# dentine-confined lesions; RCT once the pulp is involved; internal approach when external access is not feasible;
+# replantation / extraction for extensive inaccessible lesions; review for untreatable asymptomatic teeth - applied
+# to measured extent, pulp relation and portal position instead of a stage code.  Prognosis priors are the
+# Heithersay-anchored values used by the legacy matrix, graded by extent and reduced for pulp involvement and deep
+# access.  Every cell is an expert extrapolation to be reviewed; `docs/measurement_matrix.csv` lists all cells.
+_MEAS_EXTENTS = ("limited", "moderate", "extensive")
+_MEAS_PULP = ("dentine_barrier_preserved", "thin_dentine_barrier", "canal_communication", "not_assessable")
+_MEAS_ACCESS = ("supracrestal_portal", "shallow_subcrestal_portal", "deep_subcrestal_portal", "no_surface_portal", "crest_unknown")
+
+
+def measurement_base_cell(extent: str, pulp: str, access: str) -> Tuple[T, List[T], float, str, List[str]]:
+    """Return (primary, alternatives, prognosis_prior, evidence, notes) for one measurement cell."""
+    if extent not in _MEAS_EXTENTS or pulp not in _MEAS_PULP or access not in _MEAS_ACCESS:
+        raise KeyError(f"Unknown measurement cell {extent}/{pulp}/{access}")
+    notes: List[str] = []
+    ext_i = _MEAS_EXTENTS.index(extent)
+    if pulp == "not_assessable":
+        notes.append("canal relationship not assessable -> treated as a thin dentine barrier (conservative); supply a canal mask")
+        pulp = "thin_dentine_barrier"
+    if access == "crest_unknown":
+        notes.append("bone crest not identified -> portal treated as shallow subcrestal; review the crest level")
+        access = "shallow_subcrestal_portal"
+    if access == "no_surface_portal":
+        notes.append("no external surface portal in the candidate: external cervical resorption is unlikely from this mask; "
+                     "internal resorption or a closed cavity should be reconsidered before any lesion-directed treatment")
+        return T.MONITOR, [T.INTERNAL_REPAIR_RCT, T.EXTRACTION], 0.6, "expert-extrapolation", notes
+    accessible = access in ("supracrestal_portal", "shallow_subcrestal_portal")
+    if accessible:
+        table = {
+            "dentine_barrier_preserved": [(T.EXTERNAL_REPAIR, [T.MONITOR], 0.95, "ESE-2023"),
+                                          (T.EXTERNAL_REPAIR, [T.EXTERNAL_REPAIR_RCT, T.MONITOR], 0.90, "ESE-2023"),
+                                          (T.EXTERNAL_REPAIR_RCT, [T.EXTERNAL_REPAIR, T.INTERNAL_REPAIR_RCT, T.MONITOR, T.EXTRACTION], 0.65, "Patel-2018")],
+            "thin_dentine_barrier": [(T.EXTERNAL_REPAIR_VPT, [T.EXTERNAL_REPAIR, T.EXTERNAL_REPAIR_RCT], 0.90, "ESE-2023"),
+                                     (T.EXTERNAL_REPAIR_RCT, [T.EXTERNAL_REPAIR_VPT, T.INTERNAL_REPAIR_RCT], 0.80, "ESE-2023"),
+                                     (T.EXTERNAL_REPAIR_RCT, [T.INTERNAL_REPAIR_RCT, T.INTENTIONAL_REPLANT, T.EXTRACTION, T.MONITOR], 0.55, "Patel-2018")],
+            "canal_communication": [(T.EXTERNAL_REPAIR_RCT, [T.INTERNAL_REPAIR_RCT], 0.85, "ESE-2023"),
+                                    (T.EXTERNAL_REPAIR_RCT, [T.INTERNAL_REPAIR_RCT, T.HEMISECTION, T.EXTRACTION], 0.75, "ESE-2023"),
+                                    (T.INTERNAL_REPAIR_RCT, [T.EXTERNAL_REPAIR_RCT, T.INTENTIONAL_REPLANT, T.EXTRACTION, T.DECORONATION, T.MONITOR], 0.45, "ESE-2023")],
+        }
+    else:  # deep subcrestal portal: external access unlikely (Patel 2018 pt 2 -> internal approach / replantation)
+        table = {
+            "dentine_barrier_preserved": [(T.MONITOR, [T.INTERNAL_REPAIR_RCT, T.INTENTIONAL_REPLANT], 0.75, "Patel-2018"),
+                                          (T.INTERNAL_REPAIR_RCT, [T.INTENTIONAL_REPLANT, T.MONITOR], 0.70, "Patel-2018"),
+                                          (T.INTENTIONAL_REPLANT, [T.INTERNAL_REPAIR_RCT, T.EXTRACTION, T.MONITOR], 0.45, "ESE-2023")],
+            "thin_dentine_barrier": [(T.INTERNAL_REPAIR_RCT, [T.MONITOR, T.INTENTIONAL_REPLANT], 0.70, "Patel-2018"),
+                                     (T.INTERNAL_REPAIR_RCT, [T.INTENTIONAL_REPLANT, T.EXTRACTION], 0.65, "Patel-2018"),
+                                     (T.INTENTIONAL_REPLANT, [T.INTERNAL_REPAIR_RCT, T.EXTRACTION, T.MONITOR], 0.40, "ESE-2023")],
+            "canal_communication": [(T.INTERNAL_REPAIR_RCT, [T.INTENTIONAL_REPLANT], 0.70, "ESE-2023"),
+                                    (T.INTERNAL_REPAIR_RCT, [T.INTENTIONAL_REPLANT, T.EXTRACTION], 0.55, "ESE-2023"),
+                                    (T.EXTRACTION, [T.INTENTIONAL_REPLANT, T.DECORONATION, T.MONITOR], 0.25, "ESE-2023")],
+        }
+    primary, alts, prior, evidence = table[pulp][ext_i]
+    return primary, list(alts), prior, evidence, notes
+
+
+def recommend_from_measurements(summary, mods: ClinicalModifiers | None = None,
+                                portal_angle_deg: Optional[float] = None) -> Recommendation:
+    """Safe set + default ranking keyed by the measurement-based `ExtentSummary` (rev 2.9).
+
+    `summary` is an `ecr_cds.extent_summary.ExtentSummary`.  No staging code is read or produced.
+    """
+    mods = mods or ClinicalModifiers()
+    primary, alts, prior, evidence, notes = measurement_base_cell(summary.extent_descriptor, summary.pulp_relationship,
+                                                                  summary.access_descriptor)
+    ranking: List[T] = [primary] + [a for a in alts if a != primary]
+    rationale = [f"Measurement cell {summary.cell_key}: {primary.value} ({evidence})."] + [f"Note: {n}." for n in notes]
+    deep = bool(summary.deep)
+    end_stage_like = summary.extent_descriptor == "extensive" and (summary.pulp_involved or
+                                                                 summary.access_descriptor == "deep_subcrestal_portal")
+    if summary.restorability_concern:
+        rationale.append(f"Measured dentine loss {summary.dentine_volume_fraction_involved:.0%} of the root dentine raises a "
+                         "restorability concern; confirm restorability clinically.")
+    wide = (summary.circumferential_fraction or 0.0) > 0.5
+    rec = _apply_modifier_rules(ranking, mods, prior, evidence, rationale, cell_key=summary.cell_key,
+                                cell_scheme=SCHEME_MEASUREMENT, deep=deep, pulp_involved=summary.pulp_involved,
+                                wide_or_deep=deep or wide, end_stage=end_stage_like, portal_angle_deg=portal_angle_deg,
+                                calcified_fraction=summary.repair_tissue_fraction,
+                                depth_label=f"{summary.extent_descriptor} extent / {summary.access_descriptor}")
+    if summary.pulp_relationship == "not_assessable":
+        rec.missing_inputs = list(rec.missing_inputs) + ["canal_delineation"]
+        rec.requires_confirmation = True
+    if summary.access_descriptor == "crest_unknown":
+        rec.missing_inputs = list(rec.missing_inputs) + ["bone_crest_level"]
+        rec.requires_confirmation = True
+    if summary.near_boundary:
+        rec.flags.append("descriptor_near_band_edge")
+    if summary.access_descriptor == "no_surface_portal":
+        rec.flags.append("no_external_portal_reconsider_diagnosis")
+    return rec
+
+
+def measurement_matrix_rows() -> List[Dict[str, str]]:
+    """All base cells of the measurement-indexed mapping (for docs/measurement_matrix.csv and review)."""
+    rows = []
+    for e in _MEAS_EXTENTS:
+        for p in _MEAS_PULP:
+            for a in _MEAS_ACCESS:
+                prim, alts, prior, ev, notes = measurement_base_cell(e, p, a)
+                rows.append({"extent_descriptor": e, "pulp_relationship": p, "access_descriptor": a,
+                             "primary": prim.value, "alternatives": "|".join(x.value for x in alts),
+                             "prognosis_prior": f"{prior:.2f}", "evidence": ev, "notes": "; ".join(notes)})
+    return rows
 
 
 def manual_patel_code(height: Optional[int], spread: Optional[str], proximity: Optional[str]) -> Optional[str]:

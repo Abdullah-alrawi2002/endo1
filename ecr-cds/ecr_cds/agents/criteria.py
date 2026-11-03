@@ -281,7 +281,7 @@ def _q7_extent(d):
     bits.append(f"spread {d.angular_spread_deg:.0f} deg")
     if d.min_canal_distance_mm is not None:
         bits.append("canal reached" if not d.canal_wall_intact else f"{d.min_canal_distance_mm:.2f} mm dentine to canal")
-    return "measured", "; ".join(bits) + " -> Patel components computed by the classifier agent"
+    return "measured", "; ".join(bits) + " -> full extent summary measured by the feature-measurement / extent-summary agents"
 
 
 DIAGNOSTIC_QUESTIONS = [
@@ -291,7 +291,7 @@ DIAGNOSTIC_QUESTIONS = [
     ("Q4", "Is there preserved dentine around the canal while the lesion spreads around it?", _q4_preserved_dentine),
     ("Q5", "Does the morphology look like resorption rather than caries / a smooth cavity?", _q5_resorption_not_caries),
     ("Q6", "Does the lesion persist in all three planes as a true 3-D defect?", _q6_multiplanar),
-    ("Q7", "How extensive is it (Patel height / circumferential extent / pulp relationship)?", _q7_extent),
+    ("Q7", "How extensive is it (apical reach / circumferential extent / pulp relationship, measured)?", _q7_extent),
 ]
 
 
