@@ -7,7 +7,7 @@ is superseded: no expert-reviewed ECR diagnosis was established on that scan.
 See `docs/ECR_CDS_Design.md` for the full design. Quick start:
 
 ```bash
-pip install pydicom scikit-learn scipy numpy
+pip install pydicom scikit-learn scipy numpy matplotlib nibabel
 python tests/test_pipeline.py          # builds a 500-slice DICOM phantom and runs every stage
 ```
 
@@ -93,8 +93,18 @@ See `docs/NEMOTRON_LOCAL.md` (serving recipes, guards, caveats) and `docs/RECOGN
   keyed by that summary through a documented measurement-indexed mapping (`docs/measurement_matrix.csv`).
   `--staging-scheme patel_3d` reproduces the rev <= 2.8 outputs.
 
+One command runs a CBCT folder or ZIP through load, geometry QA, perception (evidence frames), feature
+measurement, and the measurement-scheme conference, and writes `conference_report.json`. It does not emit Patel
+codes. With `VLM_BASE_URL` unset the visual features are a deterministic local reading (no GPU). With it set, that
+OpenAI-compatible server is the feature reader. The process prints which mode ran.
+
 ```bash
-NEMOTRON_BASE_URL=http://127.0.0.1:8080/v1 python -m ecr_cds.cli conference --dicom scan.zip --out out --llm nemotron --buccal 0,1,0
+python -m ecr_cds.cli phantom-dicom --out tiny_cbct          # synthetic series, no patient data
+python -m ecr_cds.cli vlm-measure --dicom tiny_cbct --out out
+# real scan:
+python -m ecr_cds.cli vlm-measure --dicom /path/to/cbct.zip --out out
+# optional vision model (llama.cpp / Ollama / vLLM, or any OpenAI-compatible vision API):
+VLM_BASE_URL=http://127.0.0.1:8080/v1 VLM_MODEL=your-model python -m ecr_cds.cli vlm-measure --dicom /path/to/cbct.zip --out out
 python tests/test_vlm_features.py   # schema, geometry vs phantom truth, flagging, mapping, conference e2e with a fake VLM (~4 min)
 ```
 

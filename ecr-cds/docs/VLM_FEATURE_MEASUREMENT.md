@@ -235,10 +235,29 @@ clinician action; they are never selected automatically.
   `feature_bundles` and `screen_reconciliation`; `consensus_markdown` renders "Measured extent summary" and
   "Feature measurements" sections.
 
-## 7. Running against a local VLM
+## 7. Running
 
-Any OpenAI-compatible vision server works (llama.cpp `llama-server`, Ollama, vLLM); see
-`docs/NEMOTRON_LOCAL.md` for serving recipes.
+`vlm-measure` is the single CBCT entry point for this layer. It loads a DICOM folder or ZIP, runs geometry QA,
+perception (tooth ROI, candidate screen, evidence frames), feature measurement, and the multi-agent conference on
+the measurement scheme, then writes `conference_report.json`. It does not assign Patel codes.
+
+```bash
+python -m ecr_cds.cli phantom-dicom --out tiny_cbct
+python -m ecr_cds.cli vlm-measure --dicom tiny_cbct --out out
+# or a real CBCT export:
+python -m ecr_cds.cli vlm-measure --dicom /path/to/cbct.zip --out out --buccal 0,1,0
+```
+
+Feature reader, printed as `VLM mode:`:
+
+| `VLM_BASE_URL` | mode | what the visual features are |
+|---|---|---|
+| unset | `local_deterministic_fallback` | deterministic image statistics of the candidate (no GPU, no network). Physical measurements stay voxel geometry. |
+| set | `openai_compatible` | one structured request per candidate to that OpenAI-compatible server. Estimates are reconciled; geometry wins. |
+
+Optional: `VLM_API_KEY` (default `none` for a local server), `VLM_MODEL` (default: first id from `/models`), `VLM_TIMEOUT` (seconds). A set but unreachable URL stops the command; it does not silently switch to the local reading.
+
+The older `conference` command is still available, including the legacy `--staging-scheme patel_3d` opt-in and `NEMOTRON_BASE_URL` / `--llm nemotron`.
 
 ```bash
 export NEMOTRON_BASE_URL=http://127.0.0.1:8080/v1          # local server, no data leaves the machine

@@ -424,6 +424,8 @@ def consensus_markdown(c: Dict) -> str:
                 L += ["| visual feature | value | VLM confidence |", "|---|---|---|"]
                 L += [f"| {k} | {vis.get(k)} | {(vis.get('confidence') or {}).get(k, 'n/a')} |"
                       for k in vis if k not in ("assessed", "confidence", "free_text")]
+                if vis.get("description"):
+                    L += ["", vis["description"]]
                 if vis.get("free_text"):
                     L += ["", f"Model description: {vis['free_text']}"]
                 L += [""]
@@ -440,8 +442,12 @@ def consensus_markdown(c: Dict) -> str:
                 L += ["Unverifiable VLM values (not geometrically checkable, **not used** for planning): " + ", ".join(b["unverified_vlm_values"]), ""]
             if b.get("vlm_geometry_disagreements"):
                 L += ["VLM / geometry disagreements (geometry wins):"] + [f"- {d}" for d in b["vlm_geometry_disagreements"]] + [""]
-        L += ["The model never sees the measured numbers; every value it reports is checked against the voxel geometry, and values "
-              "that cannot be checked are flagged and excluded from the extent summary and plan.", ""]
+        if any((b.get("vlm") or {}).get("status") == "local_fallback" for b in fbs.values()):
+            L += ["Visual features on this run came from the deterministic local fallback (VLM_BASE_URL was unset). "
+                  "Physical measurements are voxel geometry. A vision model was not called.", ""]
+        else:
+            L += ["The model never sees the measured numbers; every value it reports is checked against the voxel geometry, and values "
+                  "that cannot be checked are flagged and excluded from the extent summary and plan.", ""]
     sp = c.get("suggested_patel")
     if sp:
         L += ["## Suggested Patel 3D classification (LEGACY scheme, opt-in)", "",

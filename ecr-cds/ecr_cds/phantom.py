@@ -7,6 +7,7 @@ from .segmentation import ToothSegmentation
 
 VOX = 0.1  # mm, isotropic
 SHAPE = (500, 160, 160)  # Z (axial slices), Y, X  -> 50 x 16 x 16 mm
+TINY_VOX = 0.15  # mm; under the 0.2 mm geometry-QA limit after DICOM round-trip
 
 
 def make_phantom(height_mm_apical: float, spread_deg: float, perforate: bool,
@@ -86,11 +87,48 @@ def make_phantom(height_mm_apical: float, spread_deg: float, perforate: bool,
     return vol, seg, lesion, truth
 
 
-def write_dicom_series(vol: np.ndarray, out_dir: str):
+def make_tiny_cbct(voxel_mm: float = TINY_VOX, seed: int = 0):
+    """One tooth, enamel, canal, bone and a cervical surface defect in a small isotropic volume.
+
+    About 16 x 14 x 14 mm.  Used to exercise ``vlm-measure`` without a patient scan.
+    Intensities follow the large phantom (dentine 1600, enamel 2600, lesion ~620) so the
+    classical segmenter and cervical screen have something to find.  Not a clinical phantom.
+    """
+    sp = float(voxel_mm)
+    Z, Y, X = int(round(16 / sp)), int(round(14 / sp)), int(round(14 / sp))
+    zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
+    cy, cx = (Y - 1) / 2.0, (X - 1) / 2.0
+    r = np.hypot(yy - cy, xx - cx) * sp
+    z_mm = zz * sp
+    cej, apex, crest = 5.0, 13.5, 6.5
+    root_frac = np.clip((z_mm - cej) / (apex - cej), 0, 1)
+    tooth_r = np.where(z_mm < cej, 3.4, 2.8 - 1.8 * root_frac)
+    tooth = (r <= tooth_r) & (z_mm >= 2.0) & (z_mm <= apex)
+    canal_r = np.where(z_mm < cej, 0.7, 0.55 - 0.25 * root_frac)
+    canal = (r <= np.maximum(canal_r, 0.25)) & (z_mm >= 4.0) & (z_mm <= apex - 0.4)
+    enamel = tooth & (z_mm < cej - 0.4) & (r > tooth_r - 0.7)
+    bone = (~tooth) & (z_mm >= crest) & (z_mm <= apex + 1.2) & (r <= 6.0) & (r >= tooth_r + 0.35)
+    ang = (np.degrees(np.arctan2(yy - cy, xx - cx)) + 360.0) % 360.0
+    ang = np.minimum(ang, 360.0 - ang)
+    lesion = tooth & (z_mm >= cej - 0.3) & (z_mm <= cej + 2.4) & (ang <= 40) & (r >= tooth_r - 1.4)
+    lesion &= ~canal
+    vol = np.zeros((Z, Y, X), np.float32)
+    rng = np.random.default_rng(seed)
+    vol[bone] = 900
+    vol[tooth] = 1600
+    vol[enamel] = 2600
+    vol[canal] = 280
+    vol[lesion] = 620
+    vol += rng.normal(0, 20, vol.shape).astype(np.float32)
+    return vol
+
+
+def write_dicom_series(vol: np.ndarray, out_dir: str, voxel_mm: float = None):
     import pydicom
     from pydicom.dataset import FileDataset, FileMetaDataset
     from pydicom.uid import ExplicitVRLittleEndian, generate_uid
     study, series = generate_uid(), generate_uid()
+    vox = VOX if voxel_mm is None else float(voxel_mm)
     v16 = np.clip(vol, 0, 4095).astype(np.uint16)
     for i in range(vol.shape[0]):
         meta = FileMetaDataset()
@@ -104,8 +142,8 @@ def write_dicom_series(vol: np.ndarray, out_dir: str):
         ds.Modality = "CT"; ds.Manufacturer = "Phantom"; ds.KVP = 90
         ds.PatientID = "PHANTOM"; ds.SeriesDescription = "CBCT phantom"
         ds.Rows, ds.Columns = vol.shape[1], vol.shape[2]
-        ds.PixelSpacing = [VOX, VOX]; ds.SliceThickness = VOX
-        ds.ImagePositionPatient = [0.0, 0.0, i * VOX]
+        ds.PixelSpacing = [vox, vox]; ds.SliceThickness = vox
+        ds.ImagePositionPatient = [0.0, 0.0, i * vox]
         ds.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
         ds.InstanceNumber = i + 1
         ds.SamplesPerPixel = 1; ds.PhotometricInterpretation = "MONOCHROME2"

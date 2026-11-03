@@ -50,7 +50,8 @@ class FeatureMeasurementAgent:
             bb.arrays["backend_failures"] = bb.arrays.get("backend_failures", 0) + 1
         elif vlm_status in ("ok", "abstained"):
             bb.arrays["backend_calls_ok"] = bb.arrays.get("backend_calls_ok", 0) + 1
-        basis = "vlm+measurement" if vlm_status == "ok" else "measurement"
+        basis = ("vlm+measurement" if vlm_status == "ok"
+                 else "local+measurement" if vlm_status == "local_fallback" else "measurement")
         caveats = list(bundle.caveats) + ["no_staging_code_no_diagnosis_no_treatment_implied"]
         ev = Evidence(self.name, "feature_bundle", bundle.to_dict(), basis=basis, refers_to=cid, caveats=caveats)
         bb.post(ev)

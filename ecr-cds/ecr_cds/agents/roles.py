@@ -201,17 +201,18 @@ class LesionScreeningAgent(Agent):
             vis = bd.get("visual", {})
             ms = bd.get("measurements", {})
             notes = []
+            reader = "local image reading" if (bd.get("vlm") or {}).get("status") == "local_fallback" else "model"
             comm = (ms.get("root_canal_communication") or {}).get("value")
             if disp == "internal_component_for_differential" and vis.get("assessed") and vis.get("portal_of_entry_visible") == "yes":
-                notes.append("screen found no surface connection but the model reports a visible portal")
+                notes.append(f"screen found no surface connection but the {reader} reports a visible portal")
             if disp not in ("internal_component_for_differential", "unknown") and vis.get("assessed") and vis.get("portal_of_entry_visible") == "no":
-                notes.append("screen found a surface connection but the model saw no portal of entry")
+                notes.append(f"screen found a surface connection but the {reader} saw no portal of entry")
             if vis.get("assessed") and vis.get("metal_beam_hardening") == "marked":
-                notes.append("model flags marked metal / beam-hardening streaks around the candidate")
+                notes.append(f"{reader} flags marked metal / beam-hardening streaks around the candidate")
             if vis.get("assessed") and vis.get("burnout_artifact_suspected") == "yes":
-                notes.append("model suspects cervical burnout")
+                notes.append(f"{reader} suspects cervical burnout")
             if comm is True and vis.get("assessed") and vis.get("pericanal_radiopaque_line") == "intact":
-                notes.append("geometry shows canal communication but the model reads the pericanal line as intact")
+                notes.append(f"geometry shows canal communication but the {reader} reads the pericanal line as intact")
             rows.append({"component_id": cid, "screen_disposition": disp, "vlm_status": bd.get("vlm", {}).get("status"),
                          "unverified_vlm_values": bd.get("unverified_vlm_values", []),
                          "vlm_geometry_disagreements": bd.get("vlm_geometry_disagreements", []), "notes": notes})
@@ -505,15 +506,17 @@ class SkepticAgent(Agent):
         fb_ev = bb.latest("feature_bundle", refers_to=d.component_id)
         bundle = fb_ev.content if fb_ev else None
         if bundle:
+            local_read = (bundle.get("vlm") or {}).get("status") == "local_fallback"
+            who = "Local image reading" if local_read else "Model"
             if bundle.get("unverified_vlm_values"):
-                add("Model-reported values without geometric verification: " + ", ".join(bundle["unverified_vlm_values"])
+                add(f"{who}-reported values without geometric verification: " + ", ".join(bundle["unverified_vlm_values"])
                     + "; treat as unmeasured.", "minor")
             if bundle.get("vlm_geometry_disagreements"):
-                add("Model estimates disagree with voxel geometry for " + ", ".join(bundle["vlm_geometry_disagreements"])
-                    + "; either the mask or the model reading is wrong.", "moderate")
+                add(f"{who} estimates disagree with voxel geometry for " + ", ".join(bundle["vlm_geometry_disagreements"])
+                    + "; geometry is kept.", "moderate")
             notes = bundle_feature_notes(bundle)
             for c in notes["confounders"]:
-                add(f"Model flags a confounder on the frame: {c}.", "moderate" if ("marked" in c or c == "burnout") else "minor")
+                add(f"{who} flags a confounder on the frame: {c}.", "moderate" if ("marked" in c or c == "burnout") else "minor")
             if bundle.get("vlm", {}).get("status") == "abstained":
                 add("Vision model samples disagreed on the visual features (abstained); the visual reading was not used.", "minor")
             recon = bb.latest("screen_reconciliation")

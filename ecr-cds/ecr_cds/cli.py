@@ -6,6 +6,7 @@
   python -m ecr_cds.cli evaluate  ...   off-policy evaluate a candidate policy vs. the log
   python -m ecr_cds.cli matrix    ...   print the 32-cell matrix / end-stage matrix
   python -m ecr_cds.cli conference ... multi-agent case conference: suggested diagnosis + plan (research)
+  python -m ecr_cds.cli vlm-measure ... CBCT folder/ZIP -> QA -> features -> conference JSON (no Patel codes)
 """
 from __future__ import annotations
 
@@ -294,6 +295,86 @@ def _buccal(ns):
     return tuple(float(v) for v in b.split(",")) if b else None
 
 
+def cmd_phantom_dicom(ns):
+    """Write a tiny synthetic CBCT series (no patient data) for the feature-measurement smoke test."""
+    from .phantom import TINY_VOX, make_tiny_cbct, write_dicom_series
+    vol = make_tiny_cbct()
+    os.makedirs(ns.out, exist_ok=True)
+    write_dicom_series(vol, ns.out, voxel_mm=TINY_VOX)
+    print(f"wrote {vol.shape[0]} synthetic CBCT slices ({vol.shape[1]}x{vol.shape[2]}, {TINY_VOX} mm) to {ns.out}")
+
+
+def cmd_vlm_measure(ns):
+    """Load a CBCT folder or ZIP and run the measurement conference.  No Patel codes.
+
+    Feature reader:
+      VLM_BASE_URL unset -> deterministic local image statistics (no GPU).
+      VLM_BASE_URL set   -> that OpenAI-compatible vision server.
+    Conference reasoning stays on the rule agents.  The command prints which mode ran.
+    """
+    from .dicom_loader import load_dicom_series
+    from .pipeline import _quality_checks
+    from .agents import CaseConference, NullBackend, consensus_markdown
+    from .agents.llm_backend import resolve_feature_backend
+
+    try:
+        feature_backend, mode_id, detail = resolve_feature_backend()
+    except RuntimeError as e:
+        print(f"VLM mode: openai_compatible — not started\n{e}", file=sys.stderr)
+        raise SystemExit(2) from e
+    print(f"VLM mode: {mode_id} ({detail})")
+
+    vol = load_dicom_series(ns.dicom, expected_slices=ns.expected_slices)
+    qa = _quality_checks(vol)
+    print(f"Loaded {qa['slices']} slices, shape {qa['shape_zyx']}, spacing {qa['spacing_mm']} mm")
+    print("Geometry QA:", "no issues" if not qa["issues"] else "")
+    for issue in qa["issues"]:
+        print("  QA:", issue)
+
+    auto, seed_source = None, "clinician"
+    if ns.labelmap:
+        from .adapters import SlicerLabelmapToothSegmenter
+        seed = tuple(int(v) for v in ns.seed.split(","))
+        tooth_seg = SlicerLabelmapToothSegmenter(ns.labelmap, seed)
+    else:
+        from .auto_segment import auto_segment, AutoToothSegmenter, score_candidates_radiolucency, choose_seed
+        auto = auto_segment(vol.array, vol.spacing)
+        if ns.seed:
+            seed = tuple(int(v) for v in ns.seed.split(","))
+            seed_source = "clinician"
+        elif not auto.candidates:
+            seed = None
+        else:
+            seed, seed_source = choose_seed(score_candidates_radiolucency(auto, vol.array, vol.spacing))
+        if seed is None:
+            print("No tooth seed from automatic segmentation; cannot measure.", file=sys.stderr)
+            raise SystemExit(3)
+        tooth_seg = AutoToothSegmenter(auto, seed)
+        print(f"Perception seed {seed} ({seed_source}); {len(auto.candidates)} tooth candidate(s)")
+
+    conf = CaseConference(backend=NullBackend(), feature_backend=feature_backend, max_rounds=ns.rounds,
+                          staging_scheme="measurement", vlm_features=True)
+    cej = tuple(int(v) for v in ns.cej.split(",")) if ns.cej else None
+    apex = tuple(int(v) for v in ns.apex.split(",")) if ns.apex else None
+    rep = conf.run(vol, tooth_seg, seed, seed_source=seed_source, auto=auto,
+                   cej_zyx=cej, apex_zyx=apex, modifiers=_modifiers(ns), tooth_type=ns.tooth_type,
+                   age_years=ns.age, case_id=ns.case_id, verify_mode=ns.verify_mode,
+                   sharpen_display=ns.sharpen_display, buccal_direction=_buccal(ns))
+    statuses = {cid: (b.get("vlm") or {}).get("status") for cid, b in (rep.get("feature_bundles") or {}).items()}
+    rep["vlm_mode"] = {"id": mode_id, "detail": detail, "feature_backend": getattr(feature_backend, "name", None),
+                       "per_candidate_status": {str(k): v for k, v in statuses.items()},
+                       "conference_reasoning": "rules",
+                       "staging_scheme": "measurement"}
+    rep.setdefault("architecture", {}).setdefault("settings", {})["vlm_mode"] = mode_id
+    if "suggested_patel" in rep or (rep.get("suggested_plan") or {}).get("cell_scheme") == "patel_3d":
+        print("Internal error: measurement path emitted a Patel staging output.", file=sys.stderr)
+        raise SystemExit(4)
+    paths = conf.save_outputs(rep, ns.out, volume=vol)
+    print(consensus_markdown(rep))
+    print(f"VLM mode ran: {mode_id} ({detail}); candidate feature status: {statuses or 'no candidates'}")
+    print("written:", *paths, sep="\n  ")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="ecr_cds")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -367,6 +448,27 @@ def main(argv=None):
         d.add_argument(f"--{m_}", dest=m_.replace("-", "_"))
     d.add_argument("--lesion-on-root")
     d.set_defaults(func=cmd_diagnocat_run)
+
+    vm = sub.add_parser("vlm-measure",
+                        help="CBCT folder or ZIP -> geometry QA -> perception -> VLM features -> conference JSON (no Patel codes)")
+    vm.add_argument("--dicom", required=True, help="CBCT DICOM folder or ZIP")
+    vm.add_argument("--out", default="vlm_measure_out")
+    vm.add_argument("--labelmap"); vm.add_argument("--seed", help="z,y,x (required with --labelmap)")
+    vm.add_argument("--cej", help="reviewed CEJ point z,y,x"); vm.add_argument("--apex", help="reviewed apex point z,y,x")
+    vm.add_argument("--rounds", type=int, default=1)
+    vm.add_argument("--case-id"); vm.add_argument("--expected-slices", type=int)
+    vm.add_argument("--tooth-type", default="unknown"); vm.add_argument("--age", type=float)
+    _rev28_flags(vm)
+    vm.add_argument("--buccal", help="buccal direction vector z,y,x in voxel axes")
+    for m_ in ("symptomatic", "pulp-vital", "restorable", "perio", "multirooted", "accessible",
+               "bleeding", "growing", "aesthetic", "fracture-risk"):
+        vm.add_argument(f"--{m_}", dest=m_.replace("-", "_"))
+    vm.add_argument("--lesion-on-root")
+    vm.set_defaults(func=cmd_vlm_measure)
+
+    ph = sub.add_parser("phantom-dicom", help="write a tiny synthetic CBCT DICOM folder (no patient data)")
+    ph.add_argument("--out", default="tiny_cbct")
+    ph.set_defaults(func=cmd_phantom_dicom)
 
     ns = ap.parse_args(argv)
     ns.func(ns)

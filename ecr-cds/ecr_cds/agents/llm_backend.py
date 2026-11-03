@@ -18,6 +18,10 @@ NemotronLocalBackend     - NVIDIA Nemotron 3.5 Bolt 74B-A9B (24GB) or any local 
                            llama-server / Ollama / vLLM through the OpenAI-compatible API
                            (set NEMOTRON_BASE_URL, e.g. http://localhost:8080/v1).  Adds
                            discrete-semantic-entropy abstention and optional thinking mode.
+LocalDeterministicBackend - no network call.  The feature-measurement path uses it when
+                           VLM_BASE_URL is unset: visual features come from deterministic
+                           image statistics and physical measurements from voxel geometry.
+VisionEndpointBackend    - any OpenAI-compatible vision server at VLM_BASE_URL.
 """
 from __future__ import annotations
 
@@ -37,6 +41,20 @@ class LLMBackend:
 
 
 class NullBackend(LLMBackend):
+    def complete_json(self, system, user, schema, images_png=None):
+        return None
+
+
+class LocalDeterministicBackend(LLMBackend):
+    """Marker for the feature path: do not call a model.
+
+    `measure_candidate_features` recognises this class and fills visual features from
+    deterministic image statistics.  Physical measurements stay voxel geometry.
+    """
+    name = "local_deterministic_fallback"
+    mode = "local_deterministic_fallback"
+    supports_images = False
+
     def complete_json(self, system, user, schema, images_png=None):
         return None
 
@@ -92,6 +110,72 @@ class OpenAICompatibleBackend(LLMBackend):
             txt = out["choices"][0]["message"]["content"]
             return json.loads(txt)
         except Exception as e:   # network / schema failure -> logged, agents fall back to rules
+            return {"_error": f"{type(e).__name__}: {e}"}
+
+
+class VisionEndpointBackend(OpenAICompatibleBackend):
+    """OpenAI-compatible vision endpoint selected by VLM_BASE_URL.
+
+    Probes ``/models`` before the conference so a bad URL fails immediately.
+    ``VLM_API_KEY`` defaults to ``none`` (local llama.cpp / Ollama / vLLM).
+    ``VLM_MODEL`` overrides the first model id the server reports.
+    """
+
+    def __init__(self, base_url: str, api_key: Optional[str] = None, model: Optional[str] = None,
+                 timeout: float = 180.0):
+        super().__init__(api_key=api_key or "none", base_url=base_url, model=model or "vlm",
+                         supports_images=True, timeout=timeout)
+        info = self.probe_server()
+        self.server_info = info
+        if not model:
+            ids = info.get("models") or []
+            if not ids:
+                raise RuntimeError(f"No model id reported by {self.base_url}/models; set VLM_MODEL")
+            self.model = ids[0]
+        self.name = f"openai_compatible:{self.model}"
+        self.mode = "openai_compatible"
+
+    def probe_server(self) -> Dict[str, Any]:
+        import urllib.request
+        req = urllib.request.Request(f"{self.base_url}/models",
+                                     headers={"Authorization": f"Bearer {self.api_key}"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                out = json.loads(resp.read().decode())
+            ids = [m.get("id") for m in out.get("data", []) if isinstance(m, dict) and m.get("id")]
+            return {"reachable": True, "models": ids, "base_url": self.base_url}
+        except Exception as e:
+            raise RuntimeError(
+                f"VLM server not reachable at {self.base_url} ({type(e).__name__}: {e}). "
+                "Check VLM_BASE_URL, or unset it to use the deterministic local fallback."
+            ) from e
+
+    def complete_json(self, system, user, schema, images_png=None):
+        """One image, JSON object.  Accepts a JSON object wrapped in prose."""
+        import urllib.request
+        content: Any = [{"type": "text", "text": user}]
+        if images_png and self.supports_images:
+            png = next((p for p in images_png if p), None)
+            if png is not None:
+                b64 = base64.b64encode(png).decode()
+                content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
+        body = {"model": self.model, "temperature": 0,
+                "messages": [{"role": "system", "content": system + "\nRespond with JSON only, matching this schema: "
+                              + json.dumps(schema)},
+                             {"role": "user", "content": content}],
+                "response_format": {"type": "json_object"}}
+        req = urllib.request.Request(f"{self.base_url}/chat/completions", data=json.dumps(body).encode(),
+                                     headers={"Authorization": f"Bearer {self.api_key}",
+                                              "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                out = json.loads(resp.read().decode())
+            txt = out["choices"][0]["message"].get("content") or ""
+            parsed = _extract_json(txt)
+            if parsed is None:
+                return {"_error": f"non-JSON output: {txt[:200]!r}"}
+            return parsed
+        except Exception as e:
             return {"_error": f"{type(e).__name__}: {e}"}
 
 
@@ -319,6 +403,27 @@ class NemotronLocalBackend(OpenAICompatibleBackend):
                              "enable_thinking": self.enable_thinking, "images_sent": int(bool(images_png and self.supports_images)),
                              "usage": usage_total, "sample_errors": errors}
         return modal
+
+
+def resolve_feature_backend():
+    """Feature-measurement backend for the CBCT path.
+
+    Returns ``(backend, mode_id, detail)``.
+
+    * ``VLM_BASE_URL`` unset → :class:`LocalDeterministicBackend` (no GPU, no network).
+    * ``VLM_BASE_URL`` set → :class:`VisionEndpointBackend` (OpenAI-compatible chat completions).
+      Optional ``VLM_API_KEY``, ``VLM_MODEL``, ``VLM_TIMEOUT``.
+
+    A set but unreachable URL raises ``RuntimeError``.  It does not silently fall back.
+    """
+    url = (os.environ.get("VLM_BASE_URL") or "").strip()
+    if not url:
+        backend = LocalDeterministicBackend()
+        return backend, "local_deterministic_fallback", "VLM_BASE_URL unset"
+    timeout = float(os.environ.get("VLM_TIMEOUT") or 180)
+    backend = VisionEndpointBackend(base_url=url, api_key=os.environ.get("VLM_API_KEY") or os.environ.get("OPENAI_API_KEY"),
+                                    model=(os.environ.get("VLM_MODEL") or "").strip() or None, timeout=timeout)
+    return backend, "openai_compatible", f"VLM_BASE_URL={url} model={backend.model}"
 
 
 def auto_backend(prefer: str = "auto") -> LLMBackend:

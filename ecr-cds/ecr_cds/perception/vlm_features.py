@@ -382,26 +382,170 @@ def reconcile(geom: Dict[str, Measurement], estimates: Dict[str, Any], pitch: fl
     return unverified, disagreements
 
 
+# --------------------------------------------------------------------------- local fallback
+def local_feature_reading(raw: np.ndarray, seg: ToothSegmentation, labels: np.ndarray, cid: int, spacing,
+                          descriptors=None, frame_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Deterministic visual reading used when no vision model is configured.
+
+    Categorical features come from the candidate's intensities and the screen descriptors
+    (portal, margin, canal wall, metal proximity).  Numeric estimates are left null: physical
+    measurements stay on the voxel-geometry side of the bundle and are already verified.
+    The result is reproducible for the same volume and masks.  It is not a model opinion.
+    """
+    m = labels == int(cid)
+    if not m.any():
+        raise ValueError(f"candidate {cid} has no voxels")
+    spacing_arr = np.asarray(spacing, float)
+    tooth = np.asarray(seg.tooth, bool)
+    canal = np.asarray(seg.canal, bool)
+    tooth_vals = raw[tooth] if tooth.any() else raw.ravel()
+    dentine_mode = float(np.median(tooth_vals)) if tooth_vals.size else float(np.median(raw))
+    cand = raw[m]
+    rel = float(cand.mean() / (abs(dentine_mode) + 1e-6))
+    hetero = float(cand.std() / (abs(dentine_mode) + 1e-6))
+    inclusions = float((cand >= dentine_mode * 0.92).mean()) if cand.size else 0.0
+    external = bool((ndi.binary_dilation(m) & ~tooth).any()) if tooth.any() else False
+    boundary = m & ~ndi.binary_erosion(m)
+    bpts = np.argwhere(boundary).astype(float)
+    irregularity = 0.0
+    if len(bpts) >= 5:
+        rad = np.linalg.norm(bpts - bpts.mean(0), axis=1)
+        irregularity = float(rad.std() / (rad.mean() + 1e-6))
+    depth = 0.0
+    dense_contact = 0.0
+    near_metal = 0.0
+    undermining = 1.0
+    canal_intact = None
+    canal_dist = None
+    if canal.any():
+        dist = ndi.distance_transform_edt(~canal, sampling=spacing_arr)
+        canal_dist = float(dist[m].min())
+        canal_intact = not ((m & canal).any() or canal_dist <= float(spacing_arr.min()))
+    if descriptors is not None:
+        rel = float(getattr(descriptors, "mean_intensity_rel_dentine", rel) or rel)
+        hetero = float(getattr(descriptors, "intensity_heterogeneity", hetero) or hetero)
+        inclusions = float(getattr(descriptors, "radiopaque_inclusion_fraction", inclusions) or 0.0)
+        external = bool(getattr(descriptors, "external_surface_connection", external))
+        irregularity = float(getattr(descriptors, "margin_irregularity", irregularity) or irregularity)
+        depth = float(getattr(descriptors, "max_depth_mm", depth) or 0.0)
+        dense_contact = float(getattr(descriptors, "dense_material_contact_fraction", 0.0) or 0.0)
+        near_metal = float(getattr(descriptors, "near_metal_fraction", 0.0) or 0.0)
+        undermining = float(getattr(descriptors, "undermining_ratio", undermining) or undermining)
+        if getattr(descriptors, "canal_wall_intact", None) is not None:
+            canal_intact = bool(descriptors.canal_wall_intact)
+        if getattr(descriptors, "min_canal_distance_mm", None) is not None:
+            canal_dist = float(descriptors.min_canal_distance_mm)
+
+    visible = "yes" if m.any() and rel < 0.92 else "no"
+    if visible == "no":
+        pattern = "not_visible"
+    elif inclusions >= 0.08:
+        pattern = "mottled"
+    elif hetero >= 0.15:
+        pattern = "heterogeneous"
+    else:
+        pattern = "homogeneous"
+    if irregularity >= 0.25:
+        border = "irregular"
+    elif 0 < depth < 0.8 and irregularity <= 0.08:
+        border = "smooth"
+    elif irregularity <= 0.22:
+        border = "well_defined"
+    else:
+        border = "ill_defined"
+    fibro = "yes" if inclusions >= 0.08 else "no"
+    if canal_intact is None:
+        line = "not_assessable"
+    elif canal_intact is False:
+        line = "interrupted"
+    elif canal_dist is not None and canal_dist < 0.5:
+        line = "partially_interrupted"
+    else:
+        line = "intact"
+    portal = "yes" if external else "no"
+    if dense_contact >= 0.15:
+        relation = "continuous_with_margin"
+    elif dense_contact >= 0.05:
+        relation = "adjacent_to_margin"
+    else:
+        relation = "no_restoration_visible"
+    burnout = "yes" if (external and 0 < depth < 0.7 and undermining < 1.15 and dense_contact < 0.05) else "no"
+    if near_metal >= 0.3:
+        metal = "marked"
+    elif near_metal >= 0.05:
+        metal = "mild"
+    else:
+        metal = "none"
+    panels = [str(p.get("name")) for p in ((frame_meta or {}).get("panels") or [])
+              if isinstance(p, dict) and p.get("name")]
+    description = (
+        "Deterministic local reading, not a vision model. "
+        f"Candidate is {'hypodense' if visible == 'yes' else 'not clearly hypodense'} relative to dentine "
+        f"({pattern.replace('_', ' ')}, {border.replace('_', ' ')} border). "
+        f"Portal of entry {'visible' if portal == 'yes' else 'not seen'}. "
+        f"Pericanal line {line.replace('_', ' ')}. Metal or beam-hardening: {metal}."
+    )
+    clean, errors = validate_vlm_response({
+        "visual_features": {
+            "radiolucency_pattern": pattern, "border_definition": border,
+            "fibro_osseous_appearance": fibro, "pericanal_radiopaque_line": line,
+            "portal_of_entry_visible": portal, "portal_surface": "uncertain",
+            "relation_to_restoration_margin": relation, "burnout_artifact_suspected": burnout,
+            "metal_beam_hardening": metal,
+        },
+        "estimates": {k: None for k in ESTIMATE_KINDS},
+        "panels_used": panels,
+        "description": description,
+        "lesion_visible_in_image": visible,
+    })
+    return {"status": "local_fallback", "backend": "local_deterministic_fallback",
+            "mode": "local_deterministic_fallback", "images_sent": 0, "validation_errors": errors,
+            "clean": clean, "reader": "deterministic local image statistics; not a vision-language model"}
+
+
+LOCAL_FALLBACK_DISCLAIMER = (
+    "Feature bundle for clinician review. Physical measurements are voxel geometry from the automatic "
+    "candidate mask and landmarks. Visual features are a deterministic local image-statistic reading, "
+    "not a vision model. No staging code, diagnosis or treatment is implied. A negative reading does not exclude ECR."
+)
+
+
 # --------------------------------------------------------------------------- bundle
 def measure_candidate_features(raw: np.ndarray, seg: ToothSegmentation, labels: np.ndarray, cid: int, spacing,
                                geometry: Dict[str, Any], *, backend=None, frame_png: Optional[bytes] = None,
                                tiles_png: Optional[bytes] = None, frame_meta: Optional[Dict[str, Any]] = None,
                                crop_offset_zyx=(0, 0, 0), source_id: str = "case", descriptors=None,
                                anatomy_caveats: Optional[List[str]] = None, buccal_direction=None) -> FeatureBundle:
-    """Geometry first, model second, reconciliation last.  Works without a model (geometry-only bundle)."""
+    """Geometry first, model second, reconciliation last.  Works without a model.
+
+    A :class:`LocalDeterministicBackend` fills visual features from image statistics.
+    A null backend leaves the bundle geometry-only.  An OpenAI-compatible backend is queried
+    and its estimates are checked against the geometric values; geometry always wins.
+    """
+    from ..agents.llm_backend import LocalDeterministicBackend
     spacing_arr = np.asarray(spacing, float)
     geom = measure_candidate_geometry(raw, seg, labels, cid, spacing_arr, geometry, crop_offset_zyx, descriptors,
                                       anatomy_caveats, buccal_direction, frame_meta)
-    image = frame_png if frame_png is not None else tiles_png
-    vlm = query_vlm_features(backend, cid, spacing_arr, image, frame_meta, tiles_only=frame_png is None and tiles_png is not None)
-    caveats = ["measurements_from_automatic_candidate_mask", "visual_features_are_model_readings_of_one_frame_not_findings"]
+    if isinstance(backend, LocalDeterministicBackend):
+        vlm = local_feature_reading(raw, seg, labels, cid, spacing_arr, descriptors, frame_meta)
+    else:
+        image = frame_png if frame_png is not None else tiles_png
+        vlm = query_vlm_features(backend, cid, spacing_arr, image, frame_meta,
+                                 tiles_only=frame_png is None and tiles_png is not None)
+    local = vlm["status"] == "local_fallback"
+    caveats = ["measurements_from_automatic_candidate_mask"]
+    if local:
+        caveats.append("visual_features_from_deterministic_local_image_statistics_not_a_vision_model")
+        caveats.append("physical_measurements_are_voxel_geometry_and_verified")
+    else:
+        caveats.append("visual_features_are_model_readings_of_one_frame_not_findings")
     visual = VisualFeatures()
     unverified: List[str] = []
     disagreements: List[str] = []
-    if vlm["status"] in ("ok", "abstained"):
+    if vlm["status"] in ("ok", "abstained", "local_fallback"):
         clean = vlm.pop("clean")
         vlm["raw_estimates"] = clean["estimates"]
-        if vlm["status"] == "ok":
+        if vlm["status"] in ("ok", "local_fallback"):
             visual = VisualFeatures.from_clean(clean)
             unverified, disagreements = reconcile(geom, clean["estimates"], float(spacing_arr.min()))
         else:
@@ -419,9 +563,12 @@ def measure_candidate_features(raw: np.ndarray, seg: ToothSegmentation, labels: 
         caveats.append("model_estimates_disagree_with_geometry_for_some_values")
     if any(not m.verified and m.source == SOURCE_UNAVAILABLE for m in geom.values()):
         caveats.append("some_measurements_unavailable_missing_landmark_or_mask")
-    return FeatureBundle(candidate_id=int(cid), source_id=str(source_id), spacing_zyx_mm=spacing_arr.round(4).tolist(),
-                         visual=visual, measurements=geom, vlm=vlm, unverified_vlm_values=unverified,
-                         vlm_geometry_disagreements=disagreements, caveats=caveats)
+    bundle = FeatureBundle(candidate_id=int(cid), source_id=str(source_id), spacing_zyx_mm=spacing_arr.round(4).tolist(),
+                           visual=visual, measurements=geom, vlm=vlm, unverified_vlm_values=unverified,
+                           vlm_geometry_disagreements=disagreements, caveats=caveats)
+    if local:
+        bundle.disclaimer = LOCAL_FALLBACK_DISCLAIMER
+    return bundle
 
 
 def bundle_summary_line(b: FeatureBundle) -> str:
