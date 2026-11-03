@@ -1,0 +1,33 @@
+patel_code,height,spread,proximity,primary,alternatives,prognosis_prior,evidence,end_stage,requires_confirmation
+1Ad,1,A,d,external_repair,periodic_review,0.95,ESE-2023,False,False
+1Ap,1,A,p,external_repair_vpt,external_repair_rct,0.9,ESE-2023,False,False
+1Bd,1,B,d,external_repair,periodic_review,0.92,ESE-2023,False,False
+1Bp,1,B,p,external_repair_rct,external_repair_vpt,0.85,ESE-2023,False,False
+1Cd,1,C,d,external_repair,external_repair_rct | periodic_review,0.8,Patel-2018,False,False
+1Cp,1,C,p,external_repair_rct,internal_repair_rct | periodic_review,0.7,Patel-2018,False,False
+1Dd,1,D,d,external_repair_rct,external_repair | periodic_review | extraction,0.6,expert-extrapolation,False,False
+1Dp,1,D,p,external_repair_rct,internal_repair_rct | periodic_review | extraction,0.5,expert-extrapolation,False,False
+2Ad,2,A,d,external_repair,periodic_review,0.92,ESE-2023,False,False
+2Ap,2,A,p,external_repair_rct,external_repair_vpt | internal_repair_rct,0.85,ESE-2023,False,False
+2Bd,2,B,d,external_repair,external_repair_rct | periodic_review,0.88,ESE-2023,False,False
+2Bp,2,B,p,external_repair_rct,internal_repair_rct | root_resection_hemisection | extraction,0.78,ESE-2023,False,False
+2Cd,2,C,d,external_repair_rct,external_repair | internal_repair_rct | periodic_review,0.7,Patel-2018,False,False
+2Cp,2,C,p,internal_repair_rct,external_repair_rct | periodic_review | extraction,0.65,ESE-2023,False,False
+2Dd,2,D,d,periodic_review,internal_repair_rct | decoronation | extraction,0.45,expert-extrapolation,True,False
+2Dp,2,D,p,internal_repair_rct,periodic_review | decoronation | extraction,0.45,ESE-2023,True,False
+3Ad,3,A,d,intentional_replantation,external_repair | periodic_review,0.78,ESE-2023,False,True
+3Ap,3,A,p,intentional_replantation,internal_repair_rct | external_repair_rct,0.72,ESE-2023,False,True
+3Bd,3,B,d,intentional_replantation,external_repair_rct | internal_repair_rct | periodic_review,0.72,ESE-2023,False,True
+3Bp,3,B,p,intentional_replantation,internal_repair_rct | root_resection_hemisection | extraction,0.65,ESE-2023,False,True
+3Cd,3,C,d,periodic_review,internal_repair_rct | decoronation | extraction,0.45,ESE-2023,True,False
+3Cp,3,C,p,internal_repair_rct,periodic_review | decoronation | extraction,0.45,ESE-2023,True,False
+3Dd,3,D,d,periodic_review,decoronation | extraction,0.3,ESE-2023,True,False
+3Dp,3,D,p,internal_repair_rct,periodic_review | decoronation | extraction,0.3,ESE-2023,True,False
+4Ad,4,A,d,intentional_replantation,periodic_review | extraction,0.4,Patel-2018,True,True
+4Ap,4,A,p,intentional_replantation,internal_repair_rct | extraction,0.35,Patel-2018,True,True
+4Bd,4,B,d,periodic_review,intentional_replantation | extraction,0.3,Patel-2018,True,False
+4Bp,4,B,p,extraction,intentional_replantation | root_resection_hemisection | periodic_review,0.25,Patel-2018,True,True
+4Cd,4,C,d,periodic_review,decoronation | extraction,0.15,ESE-2023,True,False
+4Cp,4,C,p,extraction,decoronation | periodic_review,0.12,ESE-2023,True,True
+4Dd,4,D,d,extraction,decoronation | periodic_review,0.1,ESE-2023,True,True
+4Dp,4,D,p,extraction,decoronation | periodic_review,0.08,ESE-2023,True,True

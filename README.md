@@ -155,6 +155,21 @@ git push -u origin main
 
 ---
 
+## ECR-CDS (CBCT cervical-resorption decision support, Python)
+
+The `ecr-cds/` directory holds the ECR-CDS Python package (imported from the rev 2.8 reference package and extended
+in rev 2.9 with a VLM-driven feature-measurement layer and a measurement-based extent summary, no staging codes).
+It is independent of the Next.js app above: see [`ecr-cds/README.md`](ecr-cds/README.md) and
+[`ecr-cds/docs/VLM_FEATURE_MEASUREMENT.md`](ecr-cds/docs/VLM_FEATURE_MEASUREMENT.md).
+
+```bash
+cd ecr-cds
+pip install numpy scipy pydicom scikit-learn nibabel matplotlib
+python tests/test_vlm_features.py
+```
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

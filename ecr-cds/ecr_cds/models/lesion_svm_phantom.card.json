@@ -1,0 +1,176 @@
+{
+  "name": "lesion_svm_phantom",
+  "data": "SYNTHETIC phantom CBCT only (ecr_cds.phantom), 5 cases, 0.1 mm isotropic, 500 slices",
+  "cases": [
+    {
+      "height_mm": 3.0,
+      "spread_deg": 150,
+      "perforate": true
+    },
+    {
+      "height_mm": 5.0,
+      "spread_deg": 240,
+      "perforate": true
+    },
+    {
+      "height_mm": 9.0,
+      "spread_deg": 150,
+      "perforate": true
+    },
+    {
+      "height_mm": 2.0,
+      "spread_deg": 70,
+      "perforate": false
+    },
+    {
+      "height_mm": 9.0,
+      "spread_deg": 300,
+      "perforate": false
+    }
+  ],
+  "lopo_cv": [
+    {
+      "case": 0,
+      "dice": 0.873268741724638,
+      "precision": 0.9828972891138762,
+      "recall": 0.785641355316896
+    },
+    {
+      "case": 1,
+      "dice": 0.9085037576861763,
+      "precision": 0.9911352275324727,
+      "recall": 0.838590059448233
+    },
+    {
+      "case": 2,
+      "dice": 0.923109837403228,
+      "precision": 0.9881865439515958,
+      "recall": 0.8660747628650385
+    },
+    {
+      "case": 3,
+      "dice": 0.7418585406221098,
+      "precision": 0.9808212125112628,
+      "recall": 0.596524189760451
+    },
+    {
+      "case": 4,
+      "dice": 0.9000223740598592,
+      "precision": 0.9972919368372873,
+      "recall": 0.8200407715226595
+    }
+  ],
+  "youden_threshold": 0.55,
+  "youden_table": [
+    {
+      "threshold": 0.1,
+      "sensitivity": 0.9688441569912947,
+      "specificity": 0.7841483344579729,
+      "youden_j": 0.7529924914492676
+    },
+    {
+      "threshold": 0.15000000000000002,
+      "sensitivity": 0.9644988271780628,
+      "specificity": 0.8213402764131404,
+      "youden_j": 0.7858391035912033
+    },
+    {
+      "threshold": 0.2,
+      "sensitivity": 0.9595351895653198,
+      "specificity": 0.8458640370637593,
+      "youden_j": 0.805399226629079
+    },
+    {
+      "threshold": 0.25,
+      "sensitivity": 0.9520835991402578,
+      "specificity": 0.8673245540397821,
+      "youden_j": 0.8194081531800399
+    },
+    {
+      "threshold": 0.30000000000000004,
+      "sensitivity": 0.9458759851213552,
+      "specificity": 0.8900607655744086,
+      "youden_j": 0.8359367506957638
+    },
+    {
+      "threshold": 0.35,
+      "sensitivity": 0.9396610102953156,
+      "specificity": 0.9066424589341103,
+      "youden_j": 0.8463034692294258
+    },
+    {
+      "threshold": 0.4,
+      "sensitivity": 0.9344888164803564,
+      "specificity": 0.9228407723543646,
+      "youden_j": 0.857329588834721
+    },
+    {
+      "threshold": 0.45000000000000007,
+      "sensitivity": 0.9277512243475872,
+      "specificity": 0.937020282346332,
+      "youden_j": 0.864771506693919
+    },
+    {
+      "threshold": 0.5,
+      "sensitivity": 0.9182803191645975,
+      "specificity": 0.9524278928907111,
+      "youden_j": 0.8707082120553085
+    },
+    {
+      "threshold": 0.55,
+      "sensitivity": 0.9018951624775495,
+      "specificity": 0.9688256339565423,
+      "youden_j": 0.870720796434092
+    },
+    {
+      "threshold": 0.6,
+      "sensitivity": 0.8889278739044666,
+      "specificity": 0.976892380024416,
+      "youden_j": 0.8658202539288826
+    },
+    {
+      "threshold": 0.65,
+      "sensitivity": 0.874714155322845,
+      "specificity": 0.982530955813199,
+      "youden_j": 0.8572451111360442
+    },
+    {
+      "threshold": 0.7000000000000001,
+      "sensitivity": 0.856039787616178,
+      "specificity": 0.9867311998565756,
+      "youden_j": 0.8427709874727536
+    },
+    {
+      "threshold": 0.75,
+      "sensitivity": 0.8374684712094297,
+      "specificity": 0.990846183471682,
+      "youden_j": 0.8283146546811118
+    },
+    {
+      "threshold": 0.8,
+      "sensitivity": 0.809872805252672,
+      "specificity": 0.9970316523500198,
+      "youden_j": 0.8069044576026918
+    },
+    {
+      "threshold": 0.85,
+      "sensitivity": 0.7739839632548507,
+      "specificity": 0.9982252983458016,
+      "youden_j": 0.7722092616006524
+    },
+    {
+      "threshold": 0.9,
+      "sensitivity": 0.7303319233298329,
+      "specificity": 0.9992574751058528,
+      "youden_j": 0.7295893984356856
+    }
+  ],
+  "warning": "Not trained on patient data. Fine-tune / retrain on expert-labelled clinical CBCT before any clinical use.",
+  "saved_at": "2026-10-04 05:15:08",
+  "sklearn_version": "1.9.1",
+  "numpy_version": "2.5.3",
+  "radius": 5,
+  "levels": 16,
+  "threshold": 0.55,
+  "morph_kernel": 6
+}

@@ -1,0 +1,204 @@
+{
+ "version": "2.8",
+ "statements": [
+  {
+   "id": "ese_def",
+   "text": "ECR is initiated by destruction of the cementum, allowing clastic cells of the periodontium to interact with dentine; pathogenesis has initiation, resorptive and reparative phases.",
+   "source": "ESE position statement 2023",
+   "url": "https://onlinelibrary.wiley.com/doi/10.1111/iej.13916",
+   "tags": [
+    "Q1",
+    "definition"
+   ]
+  },
+  {
+   "id": "ese_prrs",
+   "text": "In early ECR the pulp space is protected from the resorption front by the pericanalar resorption-resistant sheet (PRRS) and the pulp remains vital; ECR enters the pulp space only in advanced stages.",
+   "source": "ESE position statement 2023",
+   "url": "https://onlinelibrary.wiley.com/doi/10.1111/iej.13916",
+   "tags": [
+    "Q2",
+    "Q4",
+    "pulp"
+   ]
+  },
+  {
+   "id": "ese_aetiology",
+   "text": "Aetiology is poorly understood; orthodontic treatment and a history of traumatic dental injury are the most commonly associated factors, considered predisposing rather than causative.",
+   "source": "ESE position statement 2023",
+   "url": "https://onlinelibrary.wiley.com/doi/10.1111/iej.13916",
+   "tags": [
+    "Q8",
+    "predisposing"
+   ]
+  },
+  {
+   "id": "ese_clinical",
+   "text": "Early ECR is often asymptomatic and found incidentally; advanced ECR may present with gingivitis, pulpitis or periapical periodontitis; buccal/palatal lesions may show a cervical pink spot; cavitated lesions show profuse bleeding and a hard/scratchy sensation on probing.",
+   "source": "ESE position statement 2023",
+   "url": "https://onlinelibrary.wiley.com/doi/10.1111/iej.13916",
+   "tags": [
+    "Q8",
+    "clinical"
+   ]
+  },
+  {
+   "id": "ese_radiographic",
+   "text": "ECR has no classic radiographic appearance: radiolucent in the resorptive phase, mottled in moderate/advanced reparative stages; borders may be well-defined or ragged; the canal outline and PRRS should remain traceable unless the canal wall is perforated.",
+   "source": "ESE position statement 2023",
+   "url": "https://onlinelibrary.wiley.com/doi/10.1111/iej.13916",
+   "tags": [
+    "Q2",
+    "Q5",
+    "imaging"
+   ]
+  },
+  {
+   "id": "ese_cbct",
+   "text": "CBCT provides essential three-dimensional information on lesion nature and extent, degree of circumferential spread and proximity to the root canal; the ESE recommends CBCT to aid diagnosis and management of ECR.",
+   "source": "ESE position statement 2023",
+   "url": "https://onlinelibrary.wiley.com/doi/10.1111/iej.13916",
+   "tags": [
+    "Q6",
+    "Q7",
+    "imaging"
+   ]
+  },
+  {
+   "id": "ese_irr",
+   "text": "Parallax imaging and CBCT differentiate ECR from internal root resorption; internal resorption is centred on and expands the canal, ECR is eccentric with a traceable canal.",
+   "source": "ESE position statement 2023",
+   "url": "https://onlinelibrary.wiley.com/doi/10.1111/iej.13916",
+   "tags": [
+    "Q2",
+    "differential"
+   ]
+  },
+  {
+   "id": "ese_patel",
+   "text": "The Patel classification is a three-dimensional assessment describing lesion height, circumferential spread and proximity to the root canal; for multi-rooted teeth the total axial spread at the CEJ region and the number of roots affected determine spread.",
+   "source": "ESE position statement 2023; Patel et al. 2018",
+   "url": "https://pubmed.ncbi.nlm.nih.gov/28746776/",
+   "tags": [
+    "Q7",
+    "staging"
+   ]
+  },
+  {
+   "id": "patel_components",
+   "text": "Height 1: at CEJ or coronal to bone crest; 2: extends into coronal third of root and apical to bone crest; 3: into mid-third; 4: beyond mid-third. Spread A <=90, B >90-180, C >180-270, D >270 degrees. Proximity d: confined to dentine; p: probable pulpal involvement.",
+   "source": "Patel, Mavridou, Lambrechts & Saberi 2018 (IEJ 51:206)",
+   "url": "https://pubmed.ncbi.nlm.nih.gov/28746776/",
+   "tags": [
+    "Q7",
+    "staging"
+   ]
+  },
+  {
+   "id": "ese_aims",
+   "text": "Treatment aims: excavate the resorptive tissue, restore the resorptive defect and monitor the tooth for recurrence.",
+   "source": "ESE position statement 2023",
+   "url": "https://onlinelibrary.wiley.com/doi/10.1111/iej.13916",
+   "tags": [
+    "plan"
+   ]
+  },
+  {
+   "id": "ese_factors",
+   "text": "Management depends on the nature, extent and size of the portal of entry and on the accessibility of the lesion; management options are still experimental with short-to-medium-term outcomes; prosthodontic alternatives should be discussed with the patient before treating ECR.",
+   "source": "ESE position statement 2023",
+   "url": "https://onlinelibrary.wiley.com/doi/10.1111/iej.13916",
+   "tags": [
+    "plan",
+    "consent"
+   ]
+  },
+  {
+   "id": "ese_prognosis",
+   "text": "Posterior teeth and greater lesion extent reduce tooth survival.",
+   "source": "ESE position statement 2023",
+   "url": "https://onlinelibrary.wiley.com/doi/10.1111/iej.13916",
+   "tags": [
+    "plan",
+    "prognosis"
+   ]
+  },
+  {
+   "id": "patel_mgmt",
+   "text": "Patel's management guidance: external repair for accessible lesions confined to dentine; combined external repair and root canal treatment when the pulp is involved; internal repair via the canal for inaccessible lesions; intentional replantation or extraction for extensive, inaccessible or unrestorable lesions; periodic review for untreatable but asymptomatic cases.",
+   "source": "Patel, Foschi, Mannocci & Patel 2018 (IEJ 51:1224)",
+   "url": "https://onlinelibrary.wiley.com/doi/full/10.1111/iej.12946",
+   "tags": [
+    "plan"
+   ]
+  },
+  {
+   "id": "dmfr_mimics",
+   "text": "Cervical burnout, non-carious cervical lesions, root caries, developmental root concavities/furcation and restoration artefacts mimic ECR on CBCT; verify in multiple planes and consecutive slices.",
+   "source": "DMFR 2023 review of ECR mimics",
+   "url": "https://academic.oup.com/dmfr/article/52/2/20220223/7280316",
+   "tags": [
+    "Q5",
+    "Q6",
+    "differential"
+   ]
+  },
+  {
+   "id": "diagnocat_scope",
+   "text": "Diagnocat's CBCT report lists per-tooth conditions with probabilities (e.g. caries signs, root caries, abfraction, periapical radiolucency, PDL widening, bone loss, endodontic treatment, restorations, internal resorption) and segments teeth, pulp/canals and jaws; it has no external/cervical resorption category.",
+   "source": "Diagnocat AI 4.0 user manual; JCM 2026 validation study",
+   "url": "https://diagnocat.com/files/eu/User%20manual%20Diagnocat%20AI%204.0.pdf",
+   "tags": [
+    "diagnocat"
+   ]
+  },
+  {
+   "id": "diagnocat_validation",
+   "text": "In an independent CBCT validation, external resorption cases (n=14) had no corresponding Diagnocat output; the software's cleared/validated scope is other endodontic findings such as periapical radiolucency.",
+   "source": "JCM 2026 (PMC13302509); Diagnocat FDA user manual",
+   "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC13302509/",
+   "tags": [
+    "diagnocat",
+    "limitations"
+   ]
+  },
+  {
+   "id": "cdt_codes",
+   "text": "CDT 2024 codes used in plans: D3471/D3472/D3473 surgical repair of root resorption (anterior/premolar/molar); D3501-D3503 surgical exposure of root surface without apicoectomy or repair; D3310/D3320/D3330 endodontic therapy; D3333 internal root repair of perforation defects; D3470 intentional reimplantation; D3450 root amputation; D3920 hemisection; D7140/D7210 extraction; D0364 limited-FOV CBCT; D9310 consultation.",
+   "source": "AAE CDT 2024 guide",
+   "url": "https://www.aae.org/specialty/wp-content/uploads/sites/2/2023/12/CDTGuide_2024.pdf",
+   "tags": [
+    "cdt",
+    "plan"
+   ]
+  },
+  {
+   "id": "vlm_limits_radiology",
+   "text": "In a 2026 evaluation of vision-language models on radiology images, overall diagnostic accuracy was 17.3% with a 74.4% hallucination rate; adding clinical context raised accuracy (10.6% to 24.0%) but the models weighted the text more than the image. A vision-language model's opinion on a CBCT frame is therefore a weak, uncalibrated second opinion that must never replace the imaging detector or the clinician's own reading.",
+   "source": "Vision-language models in radiology: accuracy and hallucination (PMC12842777, 2026)",
+   "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC12842777/",
+   "tags": [
+    "vlm_limits",
+    "imaging"
+   ]
+  },
+  {
+   "id": "vlm_entropy_abstention",
+   "text": "Discrete semantic entropy over repeated samples (T=1.0) flags unreliable large-language-model answers; rejecting high-entropy outputs raised accuracy of accepted answers at the cost of coverage (e.g. 51.7% to 76.3% at 47% coverage). The system applies this selective-prediction rule to the local vision model: disagreeing samples lead to abstention and the rule-based posterior is kept unchanged.",
+   "source": "Discrete semantic entropy filtering for radiology LLM answers (Eur Radiol 2026)",
+   "url": "https://link.springer.com/article/10.1007/s00330-026-12384-z",
+   "tags": [
+    "vlm_limits"
+   ]
+  },
+  {
+   "id": "vlm_quantization",
+   "text": "Two-bit weight quantization of vision-language models is lossy by design: benchmark averages drop by roughly 15% and text-in-image reading by 16 to 24 points relative to full precision. The 24 GB Nemotron 3.5 Bolt build is such a model; its outputs are treated as a down-weighted second opinion and have not been validated on dental CBCT.",
+   "source": "Quantization of VLMs (arXiv 2511.08914) and Nemotron 3.5 Bolt report (arXiv 2610.33039)",
+   "url": "https://www.arxiv.org/pdf/2511.08914",
+   "tags": [
+    "vlm_limits"
+   ]
+  }
+ ]
+}
