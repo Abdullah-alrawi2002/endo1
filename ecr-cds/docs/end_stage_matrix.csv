@@ -1,0 +1,11 @@
+symptoms,structure_perio,patient,first_line,second_line,third_line,note
+asymptomatic,"restorable, perio adequate",adult,internal_repair_rct (3Cp/3Dp/2Dp) or periodic_review (d-lesions),"intentional_replantation (4A/B, accessible root form)",extraction,ESE 2023 lists internal repair for 2Dp/3Cp/3Dp and periodic review for 2-4C/Dp.
+asymptomatic,"restorable, perio adequate",growing (<18 y),"periodic_review (annual CBCT-free clinical review, CBCT on change)",internal_repair_rct,decoronation,Delay irreversible treatment; decoronation preserves alveolar ridge for later implant.
+asymptomatic,non-restorable or perio compromised,adult,"periodic_review (patient-elected, informed of fracture/discoloration/pain risk)",extraction + replacement (implant / bridge / RBB),decoronation (if implant site preservation desired),Patel 2018 pt 2: untreatable + asymptomatic may be monitored until symptoms.
+asymptomatic,non-restorable or perio compromised,growing (<18 y),periodic_review,decoronation,extraction + space management,Multidisciplinary (ortho/prostho) planning per ESE 2023.
+symptomatic (pulpitis / AP / pain),"restorable, perio adequate",adult,internal_repair_rct if bleeding controllable,"hemisection (multirooted, single-root lesion)",extraction + replacement,Talpoş-Niculescu 2025: persistent bleeding after 2x CaOH2 -> abandon internal repair.
+symptomatic (pulpitis / AP / pain),"restorable, perio adequate",growing (<18 y),internal_repair_rct,decoronation,extraction,Avoid implants in growing patients; keep ridge.
+symptomatic (pulpitis / AP / pain),non-restorable or perio compromised,adult,"extraction (atraumatic / surgical, fracture risk high)",decoronation (if ridge preservation wanted),-,Patel 2018 pt 2: extensive ECR weakens cervical region -> plan surgical extraction.
+symptomatic (pulpitis / AP / pain),non-restorable or perio compromised,growing (<18 y),decoronation,extraction + space management,-,Decoronation retains root for ridge development until growth completes.
+any,"multirooted, lesion confined to one root",any,root_resection_hemisection + RCT of remaining roots,extraction,-,Talpoş-Niculescu 2025 case 2 (3Bp on DB root of #17) managed by root amputation.
+any,"repair-phase lesion (bone-like calcification, no symptoms)",any,periodic_review,-,-,Mavridou: bone ingrowth through portal of entry + no symptoms -> monitor.

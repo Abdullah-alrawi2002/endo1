@@ -1,0 +1,196 @@
+{
+  "status": "provisional",
+  "case_id": "020bd763b96d",
+  "evidence_level": "unvalidated_model",
+  "evidence_note": "Lesion model has no training card; performance unknown.",
+  "runtime_s": 3.07,
+  "acquisition": {
+    "Manufacturer": "Phantom",
+    "ManufacturerModelName": null,
+    "KVP": 90.0,
+    "XRayTubeCurrent": null,
+    "ExposureTime": null,
+    "SliceThickness": 0.1,
+    "PixelSpacing": [
+      0.1,
+      0.1
+    ],
+    "Rows": 160.0,
+    "Columns": 160.0,
+    "BitsStored": 12.0,
+    "PixelRepresentation": 0.0,
+    "RescaleIntercept": 0.0,
+    "RescaleSlope": 1.0,
+    "PixelPaddingValue": null,
+    "Modality": "CT",
+    "SeriesDescription": "CBCT phantom",
+    "PatientID_hash": "d28c0b3297d9",
+    "StudyInstanceUID_hash": "61274d1ec5d4",
+    "SeriesInstanceUID_hash": "020bd763b96d",
+    "NumberOfSlices": 500,
+    "VoxelSize_mm": [
+      0.10000000000000142,
+      0.1,
+      0.1
+    ],
+    "Isotropic": true,
+    "FieldOfView_mm": [
+      50.00000000000071,
+      16.0,
+      16.0
+    ],
+    "IntensityRange": [
+      0.0,
+      2876.0
+    ],
+    "PaddingVoxels": 0,
+    "MaxSlicePositionResidual_mm": 7.105427357601002e-15,
+    "Housekeeping": {
+      "non_dicom_skipped": 0
+    },
+    "SeriesAvailable": 1
+  },
+  "qa": {
+    "voxel_mm": 0.10000000000000142,
+    "spacing_mm": [
+      0.10000000000000142,
+      0.1,
+      0.1
+    ],
+    "slices": 500,
+    "shape_zyx": [
+      500,
+      160,
+      160
+    ],
+    "fov_mm": [
+      50.00000000000071,
+      16.0,
+      16.0
+    ],
+    "intensity_range": [
+      0.0,
+      2876.0
+    ],
+    "max_slice_position_residual_mm": 7.105427357601002e-15,
+    "housekeeping": {
+      "non_dicom_skipped": 0
+    },
+    "issues": [],
+    "note": "CBCT grey values are not Hounsfield-calibrated; all thresholds are relative."
+  },
+  "roi_bbox_zyx": [
+    [
+      10,
+      361
+    ],
+    [
+      5,
+      156
+    ],
+    [
+      5,
+      156
+    ]
+  ],
+  "patel": {
+    "height": 3,
+    "spread": "B",
+    "proximity": "p",
+    "lesion_volume_mm3": 94.81600000000135,
+    "apical_extent_mm": 9.600000000000136,
+    "coronal_extent_mm": 0.10000000000000142,
+    "bone_crest_mm": 2.3000000000000327,
+    "root_length_mm": 21.600000000000307,
+    "spread_deg": 150.0,
+    "min_canal_distance_mm": 0.1,
+    "canal_contact_voxels": 0,
+    "calcified_fraction": 0.0006960850489368883,
+    "portal_angle_deg": 1.0215957823760284,
+    "height_margin_mm": 2.400000000000034,
+    "spread_margin_deg": 30.0,
+    "proximity_margin_mm": 0.19999999999999998,
+    "borderline": false,
+    "code": "3Bp"
+  },
+  "modifiers": {
+    "symptomatic": true,
+    "pulp_vital": true,
+    "multirooted": true,
+    "lesion_on_root": "DB",
+    "surgically_accessible": false,
+    "persistent_bleeding": true,
+    "repair_phase": false
+  },
+  "tooth_type": "molar",
+  "age_years": 52,
+  "lesion_threshold": 0.5,
+  "rule_recommendation": {
+    "missing_inputs": [
+      "restorable",
+      "perio_support_adequate",
+      "growing_patient"
+    ],
+    "patel_code": "3Bp",
+    "primary": "root_resection_hemisection",
+    "alternatives": [
+      "intentional_replantation",
+      "extraction",
+      "internal_repair_rct"
+    ],
+    "safe_set": [
+      "root_resection_hemisection",
+      "intentional_replantation",
+      "extraction",
+      "internal_repair_rct"
+    ],
+    "prognosis_prior": 0.585,
+    "evidence": "ESE-2023",
+    "rationale": [
+      "Base cell 3Bp: intentional_replantation (ESE-2023).",
+      "Accessibility inferred from portal angle 1\u00b0 and height 3 -> deep (mid/apical third).",
+      "R3: persistent intracanal haemorrhage -> internal repair unlikely to seal; escalate.",
+      "R3b: multirooted tooth with localised root lesion -> root resection/hemisection preserves function.",
+      "Unknown clinical inputs: restorable, perio_support_adequate, growing_patient -> ranking is provisional; enter them before acting."
+    ],
+    "flags": [
+      "incomplete_clinical_inputs"
+    ],
+    "requires_confirmation": true
+  },
+  "decision": {
+    "patel_code": "3Bp",
+    "chosen": "root_resection_hemisection",
+    "ranking": [
+      "root_resection_hemisection",
+      "intentional_replantation",
+      "extraction",
+      "internal_repair_rct"
+    ],
+    "propensities": {
+      "root_resection_hemisection": 1.0,
+      "intentional_replantation": 0.0,
+      "extraction": 0.0,
+      "internal_repair_rct": 0.0
+    },
+    "safe_set": [
+      "root_resection_hemisection",
+      "intentional_replantation",
+      "extraction",
+      "internal_repair_rct"
+    ],
+    "requires_confirmation": true,
+    "reinspect_requested": false,
+    "rationale": [
+      "Base cell 3Bp: intentional_replantation (ESE-2023).",
+      "Accessibility inferred from portal angle 1\u00b0 and height 3 -> deep (mid/apical third).",
+      "R3: persistent intracanal haemorrhage -> internal repair unlikely to seal; escalate.",
+      "R3b: multirooted tooth with localised root lesion -> root resection/hemisection preserves function.",
+      "Unknown clinical inputs: restorable, perio_support_adequate, growing_patient -> ranking is provisional; enter them before acting.",
+      "RL policy: no feedback recorded for this code yet -> guideline default retained."
+    ]
+  },
+  "end_stage": false,
+  "end_stage_matrix": null,
+  "disclaimer": "Advisory output. Irreversible options require clinician confirmation. Final decision rests with the treating clinician."
+}
